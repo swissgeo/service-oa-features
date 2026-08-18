@@ -1,0 +1,18 @@
+---
+# WARNING this file is managed by terraform and cannot be edited manually, see
+# swissgeo/infra-terraform//github/swissgeo/modules/github-workflows-infra/main.tf
+name: on-pr
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - edited
+      - labeled
+      - unlabeled
+
+jobs:
+  infra:
+    uses: swissgeo/.github/.github/workflows/pr-auto-infra.yml@main

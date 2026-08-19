@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import sys
+from datetime import UTC, datetime
 
 import psycopg2
 from psycopg2 import sql
@@ -68,10 +69,6 @@ CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
   point_type            INT,
   point_name            JSONB,
   station_abbr          TEXT,
-  -- Postgres has no DATETIME type; TIMESTAMPTZ matches `created` below and
-  -- keeps the value unambiguous across timezones. NOT NULL because this is
-  -- the collection's time_field: a NULL here would silently drop the row from
-  -- every datetime=-filtered response.
   forecast_datetime     TIMESTAMPTZ NOT NULL,
   created               TIMESTAMPTZ NOT NULL DEFAULT now(),
   geom                  GEOMETRY(Geometry, 4326) NOT NULL
@@ -96,11 +93,12 @@ _TEMPERATURE = {
 }
 
 # Sample features for local development: one hourly temperature reading per
-# MeteoSwiss station. geom_sql is a PostGIS constructor expression rather than
-# a bound parameter, since each row uses a different one.
+# MeteoSwiss station. external_id is derived by _external_id() rather than
+# spelled out here, so it cannot drift from the columns it is built from.
+# geom_sql is a PostGIS constructor expression rather than a bound parameter,
+# since each row uses a different one.
 SAMPLE_FEATURES = (
   {
-    "external_id": "ch.meteoschweiz.ber.dkl010h0",
     "parameter_shortname": "dkl010h0",
     "parameter_description": _TEMPERATURE,
     "parameter_group": _TEMPERATURE,
@@ -114,7 +112,6 @@ SAMPLE_FEATURES = (
     "geom_sql": "ST_SetSRID(ST_MakePoint(7.4643, 46.9908), 4326)",
   },
   {
-    "external_id": "ch.meteoschweiz.sma.dkl010h0",
     "parameter_shortname": "dkl010h0",
     "parameter_description": _TEMPERATURE,
     "parameter_group": _TEMPERATURE,
@@ -128,7 +125,6 @@ SAMPLE_FEATURES = (
     "geom_sql": "ST_SetSRID(ST_MakePoint(8.5659, 47.3782), 4326)",
   },
   {
-    "external_id": "ch.meteoschweiz.gve.dkl010h0",
     "parameter_shortname": "dkl010h0",
     "parameter_description": _TEMPERATURE,
     "parameter_group": _TEMPERATURE,
@@ -142,7 +138,6 @@ SAMPLE_FEATURES = (
     "geom_sql": "ST_SetSRID(ST_MakePoint(6.1275, 46.2475), 4326)",
   },
   {
-    "external_id": "ch.meteoschweiz.bas.dkl010h0",
     "parameter_shortname": "dkl010h0",
     "parameter_description": _TEMPERATURE,
     "parameter_group": _TEMPERATURE,
@@ -156,7 +151,6 @@ SAMPLE_FEATURES = (
     "geom_sql": "ST_SetSRID(ST_MakePoint(7.5836, 47.5413), 4326)",
   },
   {
-    "external_id": "ch.meteoschweiz.lug.dkl010h0",
     "parameter_shortname": "dkl010h0",
     "parameter_description": _TEMPERATURE,
     "parameter_group": _TEMPERATURE,
@@ -170,6 +164,23 @@ SAMPLE_FEATURES = (
     "geom_sql": "ST_SetSRID(ST_MakePoint(8.9601, 46.0037), 4326)",
   },
 )
+
+
+def _external_id(feature: dict) -> str:
+  """Compose the primary key from the fields that identify a single reading.
+
+  ``<point_id>_<point_type>_<parameter_shortname>_<forecast_datetime>``, where
+  the timestamp is normalised to UTC and rendered as ``YYYYMMDDHHMMSS`` so the
+  id carries none of the ISO-8601 separators::
+
+      1_1_dkl010h0_20260115120000
+
+  Parsing rather than string-stripping the timestamp keeps the id correct for a
+  row written with a numeric UTC offset (``+01:00``) instead of a ``Z`` suffix.
+  """
+  forecast = datetime.fromisoformat(feature["forecast_datetime"])
+  compact = forecast.astimezone(UTC).strftime("%Y%m%d%H%M%S")
+  return f"{feature['point_id']}_{feature['point_type']}_{feature['parameter_shortname']}_{compact}"
 
 
 def _env(name: str) -> str:
@@ -299,7 +310,7 @@ def _seed_sample_data(cur: cursor) -> None:
     cur.execute(
       statement,
       (
-        feature["external_id"],
+        _external_id(feature),
         feature["parameter_shortname"],
         json.dumps(feature["parameter_description"]),
         json.dumps(feature["parameter_group"]),

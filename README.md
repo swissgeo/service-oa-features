@@ -28,19 +28,19 @@ SwissGeoProvider          ← extends PostgreSQLProvider
   │  query() / get()
   ├─ reads lang from thread-local (set by app.py)
   ├─ calls super().query() / super().get()
-  ├─ _translate_props() – collapses the title/description language structs
+  ├─ _translate_props() – collapses the JSONB language structs
   └─ _patch_links()     – appends ?lang=…&f=… to same-host links
   │
   ▼
-PostGIS  (swissgeo_features table)
+PostGIS  (sample_features table)
 ```
 
 ## Language handling
 
-`title` and `description` are stored as JSONB language structs:
+`parameter_description`, `parameter_group` and `point_name` are stored as JSONB language structs:
 
 ```json
-{"de": "Genfersee", "fr": "Lac Léman", "it": "Lago di Ginevra", "en": "Lake Geneva"}
+{"de": "Genf", "fr": "Genève", "it": "Ginevra", "en": "Geneva"}
 ```
 
 `SwissGeoProvider._translate_props()` collapses them to the language pygeoapi resolves, using pygeoapi's own `l10n.translate` so behaviour matches the rest of the framework: the requested language wins, then the first available language, then the struct itself. Supported languages: `en`, `de`, `fr`, `it` (falls back to `en`).
@@ -73,11 +73,11 @@ providers:
       password: ${POSTGRES_PASSWORD:-swissgeo}
       search_path: [public]
     resource_id: swissgeo-features
-    table: swissgeo_features
+    table: sample_features
     id_field: external_id
     geom_field: geom
-    time_field: created
-    title_field: title
+    time_field: forecast_datetime
+    title_field: point_name
     languages:
       - en
       - de
@@ -125,10 +125,11 @@ The schema lives in `scripts/init_database.py`, which runs both locally (the `in
 compose service, before pygeoapi starts) and in kubernetes (as an init container, see
 swissgeo/infra-kubernetes `services/service-oa-features/base/patch-init-database.yaml`).
 
-It is idempotent, so it is safe to re-run at any time. It creates the owner role, the database,
-the PostGIS extension, the `swissgeo_features` table and its indexes. The sample features are
-local-dev only and are inserted only when `DB_SEED_SAMPLE_DATA` is truthy, which compose sets and
-the deployed environments do not.
+It creates the owner role, the database, the PostGIS extension, the `sample_features` table and
+its indexes. The role, database and extension steps are idempotent, but the table is **dropped and
+recreated on every run**, so re-running it discards all existing rows — including on an ordinary
+pod restart. The sample features are local-dev only and are inserted only when
+`DB_SEED_SAMPLE_DATA` is truthy, which compose sets and the deployed environments do not.
 
 To open a shell or re-apply the bootstrap against a running database:
 

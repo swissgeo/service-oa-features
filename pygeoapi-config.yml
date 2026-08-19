@@ -79,6 +79,17 @@ resources:
       spatial:
         bbox: [5.9, 45.8, 10.5, 47.9]
         crs: http://www.opengis.net/def/crs/OGC/1.3/CRS84
+      # Dummy extent covering the sample data. pygeoapi rejects any datetime=
+      # outside this window with a 400, so keep it wide; `end: null` leaves it
+      # open-ended, which suits forecast data.
+      #
+      # begin/end MUST stay unquoted: pygeoapi reads them as datetime objects
+      # (api/__init__.py validate_datetime does te['begin'].tzinfo), and quoting
+      # turns them into strings that raise "Configured times should be RFC3339".
+      temporal:
+        begin: 2026-01-01T00:00:00Z
+        end: null
+        trs: http://www.opengis.net/def/uom/ISO-8601/0/Gregorian
     providers:
       - type: feature
         name: swissgeo_provider.SwissGeoProvider
@@ -100,11 +111,13 @@ resources:
           # deployed environments to keep failures honest.
           sslmode: ${DB_SSLMODE:-prefer}
         resource_id: swissgeo-features
-        table: swissgeo_features
+        table: sample_features
         id_field: external_id
         geom_field: geom
-        time_field: created
-        title_field: title
+        time_field: forecast_datetime
+        # point_name is a JSONB language struct, collapsed to a plain string by
+        # SwissGeoProvider before the HTML templates read it.
+        title_field: point_name
         languages:
           - en
           - de

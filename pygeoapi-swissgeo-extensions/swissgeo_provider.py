@@ -1,10 +1,10 @@
 """SwissGeo PostGIS feature provider for OGC API Features.
 
-Extends PostgreSQLProvider with language-aware field selection: ``title`` and
-``description`` arrive as per-language JSONB objects (``{"de": …, "fr": …}``)
-and are collapsed to the language pygeoapi resolves (passed in via the
-``language`` kwarg) using ``pygeoapi.l10n.translate``, before handing results
-back to pygeoapi.
+Extends PostgreSQLProvider with language-aware field selection:
+``parameter_description``, ``parameter_group`` and ``point_name`` arrive as
+per-language JSONB objects (``{"de": …, "fr": …}``) and are collapsed to the
+language pygeoapi resolves (passed in via the ``language`` kwarg) using
+``pygeoapi.l10n.translate``, before handing results back to pygeoapi.
 
 Also patches same-host links to carry ``lang`` and ``f`` query params.
 
@@ -18,11 +18,11 @@ Usage in pygeoapi-config.yml:
           dbname: swissgeo
           user: swissgeo
           password: swissgeo
-        table: swissgeo_features
+        table: sample_features
         id_field: external_id
         geom_field: geom
-        time_field: created
-        title_field: title
+        time_field: forecast_datetime
+        title_field: point_name
         languages:
           - en
           - de
@@ -44,6 +44,10 @@ LOGGER = logging.getLogger(__name__)
 _tracer = trace.get_tracer(__name__)
 
 _SUPPORTED_LANGS = {"de", "en", "fr", "it"}
+
+# Columns stored as per-language JSONB objects, collapsed by _translate_props().
+# Must stay in sync with the table definition in scripts/init_database.py.
+_LANG_STRUCT_FIELDS = ("parameter_description", "parameter_group", "point_name")
 
 _local = threading.local()
 
@@ -75,7 +79,7 @@ def _get_base_url() -> str:
 class SwissGeoProvider(PostgreSQLProvider):
   """OGC API Features provider backed by PostGIS.
 
-  Adds language-aware title/description field selection and same-host
+  Adds language-aware JSONB language-struct collapsing and same-host
   link patching on top of the standard PostgreSQLProvider.
   """
 
@@ -166,7 +170,7 @@ class SwissGeoProvider(PostgreSQLProvider):
 
 
 def _translate_props(props: dict, language) -> None:  # noqa: ANN001
-  """Collapse the ``title``/``description`` language structs in place.
+  """Collapse the JSONB language structs in place.
 
   Uses pygeoapi's own :func:`pygeoapi.l10n.translate` so behaviour matches
   the rest of the framework: the value for *language* is returned, falling
@@ -176,7 +180,7 @@ def _translate_props(props: dict, language) -> None:  # noqa: ANN001
   """
   if not language:
     return
-  for field in ("title", "description"):
+  for field in _LANG_STRUCT_FIELDS:
     if isinstance(props.get(field), dict):
       props[field] = l10n.translate(props[field], language)
 

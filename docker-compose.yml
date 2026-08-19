@@ -1,0 +1,93 @@
+services:
+  pygeoapi:
+    build: .
+    image: pygeoapi-custom
+    ports:
+      - "8080:8080"
+      - "5678:5678"
+    volumes:
+      - ./pygeoapi-config.yml:/pygeoapi/pygeoapi-config.yml
+      - ./config-files/logging-conf.yaml:/pygeoapi/config-files/logging-conf.yaml
+      - ./data:/pygeoapi/data
+    env_file:
+      - .env-docker
+    environment:
+      - PYDEBUG=${PYDEBUG}
+      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
+      - OTEL_EXPORTER_OTLP_INSECURE=true
+    depends_on:
+      init-database:
+        condition: service_completed_successfully
+      otel-collector:
+        condition: service_started
+
+  postgres:
+    image: postgis/postgis:17-3.5
+    environment:
+      - POSTGRES_DB=swissgeo
+      - POSTGRES_USER=swissgeo
+      - POSTGRES_PASSWORD=swissgeo
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U swissgeo -d swissgeo"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Same bootstrap script the kubernetes init container runs (see swissgeo/infra-kubernetes
+  # services/service-oa-features/base/patch-init-database.yaml).
+  #
+  # Locally POSTGRES_USER is the cluster superuser, so it doubles as the admin user; the script
+  # then finds its own role/database already present and just adds PostGIS, the schema and --
+  # because DB_SEED_SAMPLE_DATA is set -- the sample features.
+  init-database:
+    build: .
+    image: pygeoapi-custom
+    entrypoint: ["python", "scripts/init_database.py"]
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=swissgeo
+      - DB_USER=swissgeo
+      - DB_PW=swissgeo
+      - DB_ADMIN_USER=swissgeo
+      - DB_ADMIN_PW=swissgeo
+      - DB_SSLMODE=prefer
+      - DB_SEED_SAMPLE_DATA=true
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    volumes:
+      - ./config-files/local-otel-collector-config.yml:/etc/otelcol-contrib/config.yaml
+    ports:
+      - "4317:4317" # OTLP gRPC receiver
+      - "4318:4318" # OTLP HTTP receiver
+      - "9464:9464" # Prometheus scrape endpoint
+    depends_on:
+      - jaeger
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./config-files/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    depends_on:
+      - otel-collector
+
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686" # Jaeger UI
+    environment:
+      - COLLECTOR_OTLP_ENABLED=true
+
+volumes:
+  pgdata:

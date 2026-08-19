@@ -1,0 +1,95 @@
+[project]
+name = "service-oaf-pygeoadmin"
+version = "1.0.0"
+requires-python = ">=3.11"
+dependencies = [
+    "pygeoapi",
+    "tinydb",
+    "psycopg2-binary",
+    "sqlalchemy",
+    "geoalchemy2",
+    "packaging>=26.0",
+    "uvicorn[standard]",
+    "starlette",
+    "debugpy",
+    "pyyaml",
+    "pydantic-settings>=2.0",
+    # List of available opentelemetry-instrumentation can be found here
+    # https://github.com/open-telemetry/opentelemetry-python-contrib/tree/main/instrumentation#readme
+    "opentelemetry-exporter-otlp~=1.41",
+    "opentelemetry-instrumentation-asgi==0.62b1",
+    "opentelemetry-instrumentation-psycopg2==0.62b1",
+    "opentelemetry-sdk~=1.41",
+]
+
+[tool.ty.environment]
+extra-paths = ["pygeoapi-swissgeo-extensions"]
+
+[dependency-groups]
+dev = [
+    "ruff==0.15.17",
+    "ty",
+    "pytest",
+    "pytest-cov",
+    "pytest-xdist",
+]
+
+[tool.ruff]
+src = [
+    "app",
+    "scripts",
+]
+
+line-length = 120
+indent-width = 2
+
+#------------------------------------------------------------------------------
+# Linting configuration
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "ANN401", # Ignore Any typehint
+    "ANN002", # Ignore typehint for *args
+    "ANN003", # Ignore typehint for **kwargs
+    "D",      # Ignore pydocstyle
+    "EM",     # Ignore flake8-errmsg
+    "TRY003", # Ignore long messages in exception constructors
+    "FBT001", # Ignore boolean-type-hint-positional-argument
+    "FBT002", # Ignore boolean-default-value-positional-argument
+    "PTH123", # Ignore builtin-open
+    "TD",     # Ignore flake8-todos
+    "FIX",    # Ignore fixme comments
+    "COM812", # flak8-commas missing-trailing-comma is ignored to avoid conflict with formatter which enforces trailing commas
+]
+
+# Allow fix for all enabled rules (when `--fix`) is provided.
+unfixable = []
+
+fixable = ["ALL"]
+# Allow unused variables when underscore-prefixed.
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+    "S101",    # Ignore usage of assert statements in tests
+    "ANN201",  # Ignore missing return type hints in tests
+    "ANN001",  # Ignore missing type hints in tests
+    "PLR2004", # Ignore magic number in tests
+    "SLF001",  # Ignore private member access in tests
+]
+
+
+#------------------------------------------------------------------------------
+# Isort configuration
+[tool.ruff.lint.isort]
+section-order = [
+    "future",
+    "standard-library",
+    "third-party",
+    "test",
+    "first-party",
+    "local-folder",
+]
+
+[tool.ruff.lint.isort.sections]
+test = ["pytest"]

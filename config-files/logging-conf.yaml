@@ -1,0 +1,37 @@
+version: 1
+disable_existing_loggers: False # this allows getting loggers at module level
+
+root:
+  handlers:
+    - console
+  # Default level is WARNING to avoid noisy log output from dependencies.
+  level: WARNING
+  propagate: True
+
+loggers:
+  pygeoapi.provider:
+    level: INFO
+    handlers:
+      - console
+    propagate: True
+  pygeoapi.l10n:
+    level: ERROR
+    handlers:
+      - console
+  pygeoapi.api.itemtypes:
+    # Only log ERROR level and above; pygeoapi logs a harmless WARNING when the
+    # ?offset param is absent (int(None) → TypeError) and falls back to offset=0.
+    level: ERROR
+    handlers:
+      - console
+
+formatters:
+  standard:
+    format: "%(asctime)s %(levelname)s %(name)s %(message)s"
+    datefmt: "%Y-%m-%dT%H:%M:%S%z"
+
+handlers:
+  console:
+    class: logging.StreamHandler
+    stream: ext://sys.stdout
+    formatter: standard

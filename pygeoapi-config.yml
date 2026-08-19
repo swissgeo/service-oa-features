@@ -1,0 +1,108 @@
+server:
+  bind:
+    host: 0.0.0.0
+    port: 8080
+  url: ${PYGEOAPI_HOSTNAME:-http://localhost:8080}${API_PREFIX:-/api/oaf/rc1}
+  mimetype: application/json; charset=UTF-8
+  encoding: utf-8
+  language: en
+  languages:
+    - en
+    - de
+    - fr
+    - it
+  cors: true
+  map:
+    url: https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg
+    attribution: '&copy; <a href="https://www.swisstopo.admin.ch">swisstopo</a>'
+  pretty_print: true
+  limits:
+    default_items: 10
+    max_items: 100
+
+logging:
+  level: DEBUG
+
+metadata:
+  identification:
+    title: SWISSGEO OGC API Features
+    description:
+      de: SWISSGEO OGC API Features Dienst für Geodaten.
+      en: SWISSGEO OGC API Features service for geospatial data.
+      fr: Service SWISSGEO OGC API Features pour les géodonnées.
+      it: Servizio SWISSGEO OGC API Features per i geodati.
+    keywords:
+      - geospatial
+      - ogc
+      - features
+      - switzerland
+    terms_of_service: https://www.geo.admin.ch/de/allgemeine-nutzungsbedingungen-bgdi/
+    url: https://www.swisstopo.admin.ch
+  license:
+    name:
+      en: swisstopo OGD Terms of Use
+      de: swisstopo OGD Nutzungsbedingungen
+      fr: Conditions d'utilisation OGD swisstopo
+      it: Condizioni d'uso OGD swisstopo
+    url:
+      en: https://www.swisstopo.admin.ch/en/terms-of-use-free-geodata-and-geoservices
+      de: https://www.swisstopo.admin.ch/de/nutzungsbedingungen-kostenlose-geodaten-und-geodienste
+      fr: https://www.swisstopo.admin.ch/fr/conditions-utilisation-geodonnees-et-geoservices-gratuit
+      it: https://www.swisstopo.admin.ch/it/condizioni-utilizzo-geodati-e-geoservizi-gratuiti
+  provider:
+    name: Bundesamt für Landestopografie swisstopo
+    url: https://www.swisstopo.admin.ch
+  contact:
+    name: KOGIS – Koordination, Geoinformation und Services
+    url: https://www.geo.admin.ch
+    address: Seftigenstrasse 264
+    city: Wabern
+    postalcode: "3084"
+    country: Switzerland
+    phone: +41 58 469 01 11
+    email: info@geo.admin.ch
+    role: pointOfContact
+
+resources:
+  swissgeo-features:
+    type: collection
+    title: SWISSGEO Features
+    description: Swiss geodata features
+    keywords: [switzerland, geodata, features, swisstopo]
+    links:
+      - type: text/html
+        rel: canonical
+        title: swisstopo
+        href: https://www.swisstopo.admin.ch
+        hreflang: en
+    extents:
+      spatial:
+        bbox: [5.9, 45.8, 10.5, 47.9]
+        crs: http://www.opengis.net/def/crs/OGC/1.3/CRS84
+      temporal:
+        begin: 2026-01-01T00:00:00Z
+        end: null
+        trs: http://www.opengis.net/def/uom/ISO-8601/0/Gregorian
+    providers:
+      - type: feature
+        name: swissgeo_provider.SwissGeoProvider
+        data:
+          host: ${DB_HOST:-localhost}
+          port: ${DB_PORT:-5432}
+          dbname: ${DB_NAME:-service-oa-features}
+          user: ${DB_USER:-service-oa-features}
+          password: ${DB_PW:-swissgeo}
+          search_path: [public]
+        options:
+          sslmode: ${DB_SSLMODE:-prefer}
+        resource_id: swissgeo-features
+        table: sample_features
+        id_field: external_id
+        geom_field: geom
+        time_field: forecast_datetime
+        title_field: point_name
+        languages:
+          - en
+          - de
+          - fr
+          - it

@@ -1,0 +1,2 @@
+parameter_shortname;parameter_description_de;parameter_description_fr;parameter_description_it;parameter_description_en;parameter_group_de;parameter_group_fr;parameter_group_it;parameter_group_en;parameter_granularity;parameter_decimals;parameter_datatype;parameter_unit
+tre200h0;"Lufttemperatur 2 m über Boden; Stundenmittel";"Température de l'air à 2 m du sol; moyenne horaire";"Temperatura dell'aria a 2 m dal suolo; media oraria";"Air temperature 2 m above ground; hourly mean";Temperatur;Température;Temperatura;Temperature;H;1;Float;°C

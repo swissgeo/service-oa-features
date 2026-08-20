@@ -93,10 +93,20 @@ class TestGetLangAndFmt:
 
 
 class TestTranslateProps:
-  def test_point_name_collapsed_to_requested_lang(self) -> None:
-    props = {"point_name": {"de": "Deutsch", "fr": "Français"}}
+  def test_point_type_name_collapsed_to_requested_lang(self) -> None:
+    props = {"point_type_name": {"de": "Zentrum Postleitzahl", "fr": "Centre code postal"}}
     _translate_props(props, "de")
-    assert props["point_name"] == "Deutsch"
+    assert props["point_type_name"] == "Zentrum Postleitzahl"
+
+  def test_point_name_never_translated(self) -> None:
+    """point_name is plain TEXT in the source data, so it must pass through.
+
+    The MeteoSwiss export ships a single name per point rather than a
+    per-language struct; only point_type carries localised labels.
+    """
+    props = {"point_name": "Delémont"}
+    _translate_props(props, "de")
+    assert props["point_name"] == "Delémont"
 
   def test_parameter_description_collapsed_to_requested_lang(self) -> None:
     props = {"parameter_description": {"de": "Deutsch", "fr": "Français"}}
@@ -112,49 +122,51 @@ class TestTranslateProps:
     props = {
       "parameter_description": {"de": "Temperatur", "en": "Temperature"},
       "parameter_group": {"de": "Temperatur", "en": "Temperature"},
-      "point_name": {"de": "Genf", "en": "Geneva"},
-      "parameter_shortname": "dkl010h0",
+      "point_type_name": {"de": "Station", "en": "Station"},
+      "parameter_shortname": "tre200h0",
+      "point_name": "Genève",
       "station_abbr": "GVE",
       "value": 3.1,
     }
     _translate_props(props, "de")
     assert props["parameter_description"] == "Temperatur"
     assert props["parameter_group"] == "Temperatur"
-    assert props["point_name"] == "Genf"
+    assert props["point_type_name"] == "Station"
     # Non-struct columns pass through untouched.
-    assert props["parameter_shortname"] == "dkl010h0"
+    assert props["parameter_shortname"] == "tre200h0"
+    assert props["point_name"] == "Genève"
     assert props["station_abbr"] == "GVE"
     assert props["value"] == 3.1
 
   def test_accepts_babel_locale(self) -> None:
     locale = Locale("de")
-    props = {"point_name": {"de": "Deutsch", "fr": "Français"}}
+    props = {"point_type_name": {"de": "Deutsch", "fr": "Français"}}
     _translate_props(props, locale)
-    assert props["point_name"] == "Deutsch"
+    assert props["point_type_name"] == "Deutsch"
 
   def test_falls_back_to_first_lang_when_requested_missing(self) -> None:
-    props = {"point_name": {"de": "Deutsch"}}
+    props = {"point_type_name": {"de": "Deutsch"}}
     _translate_props(props, "it")
-    assert props["point_name"] == "Deutsch"
+    assert props["point_type_name"] == "Deutsch"
 
   def test_no_language_leaves_struct_untouched(self) -> None:
-    props = {"point_name": {"de": "Deutsch", "fr": "Français"}}
+    props = {"point_type_name": {"de": "Deutsch", "fr": "Français"}}
     _translate_props(props, None)
-    assert props["point_name"] == {"de": "Deutsch", "fr": "Français"}
+    assert props["point_type_name"] == {"de": "Deutsch", "fr": "Français"}
 
   def test_non_dict_field_untouched(self) -> None:
-    props = {"point_name": "plain string"}
+    props = {"point_type_name": "plain string"}
     _translate_props(props, "de")
-    assert props["point_name"] == "plain string"
+    assert props["point_type_name"] == "plain string"
 
   def test_missing_field_ignored(self) -> None:
     props = {"parameter_description": {"de": "Deutsch"}}
     _translate_props(props, "de")
-    assert "point_name" not in props
+    assert "point_type_name" not in props
     assert props["parameter_description"] == "Deutsch"
 
   def test_non_lang_fields_untouched(self) -> None:
-    props = {"point_name": {"en": "T"}, "extra": "keep me"}
+    props = {"point_type_name": {"en": "T"}, "extra": "keep me"}
     _translate_props(props, "en")
     assert props["extra"] == "keep me"
 
@@ -374,7 +386,7 @@ class TestProviderQuery:
       "features": [
         {
           "id": "rec-1",
-          "properties": {"point_name": {"de": "Titel", "fr": "Titre"}},
+          "properties": {"point_type_name": {"de": "Titel", "fr": "Titre"}},
         },
       ],
     }
@@ -388,7 +400,7 @@ class TestProviderQuery:
     result = provider.query(language="de")
 
     feature = result["features"][0]
-    assert feature["properties"]["point_name"] == "Titel"
+    assert feature["properties"]["point_type_name"] == "Titel"
     self_links = [link for link in feature["links"] if link["rel"] == "self"]
     assert len(self_links) == 1
     assert "col/items/rec-1" in self_links[0]["href"]
@@ -403,7 +415,7 @@ class TestProviderQuery:
         {
           "id": "rec-1",
           "geometry": geometry,
-          "properties": {"point_name": {"de": "Bern"}},
+          "properties": {"point_type_name": {"de": "Bern"}},
         },
       ],
     }

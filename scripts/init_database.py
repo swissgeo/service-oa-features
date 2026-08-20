@@ -28,17 +28,23 @@ Work is split across two identities on purpose:
 
 Seed data is local-dev only and is skipped unless DB_SEED_SAMPLE_DATA is set to
 a truthy value; the sample Swiss features have no business being in a deployed
-database.
+database. The rows are read from the CSVs in `scripts/sample-data/`, a committed
+subset of the MeteoSwiss OGD local-forecasting export -- see that directory's
+README for its provenance and `make_sample_data.py` for how to rebuild it.
 """
 
+import csv
 import json
 import logging
 import os
+import re
 import sys
+from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 
 import psycopg2
-from psycopg2 import sql
+from psycopg2 import extras, sql
 from psycopg2.extensions import ISOLATION_LEVEL_AUTOCOMMIT, connection, cursor
 
 logger = logging.getLogger("init_database")
@@ -55,20 +61,34 @@ TABLE_NAME = "sample_features"
 # module docstring.
 DROP_TABLE_SQL = f"DROP TABLE IF EXISTS {TABLE_NAME}"
 
-# parameter_description, parameter_group and point_name are JSONB language
+# parameter_description, parameter_group and point_type_name are JSONB language
 # structs ({"de": …, "fr": …}); the provider collapses them to the requested
 # language via pygeoapi's l10n. Everything else is a plain scalar.
+#
+# The columns mirror the MeteoSwiss OGD local-forecasting CSVs the sample data is
+# read from (see SAMPLE_DATA_DIR). Two consequences worth knowing:
+#
+# * point_name is TEXT, not a language struct. The source ships a single name per
+#   point ("Arosa", "Delémont"), and it is point_type that carries the localised
+#   labels -- hence the separate point_type_name column.
+# * point_id alone is not unique; the source key is (point_id, point_type), which
+#   is why external_id is built from both. station_abbr and postal_code are only
+#   populated for some point types, so both stay nullable.
 CREATE_TABLE_SQL = f"""
 CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
   external_id           TEXT PRIMARY KEY,
   parameter_shortname   TEXT,
   parameter_description JSONB,
   parameter_group       JSONB,
+  parameter_unit        TEXT,
   value                 FLOAT,
   point_id              INT,
   point_type            INT,
-  point_name            JSONB,
+  point_name            TEXT,
+  point_type_name       JSONB,
   station_abbr          TEXT,
+  postal_code           TEXT,
+  point_height_masl     FLOAT,
   forecast_datetime     TIMESTAMPTZ NOT NULL,
   created               TIMESTAMPTZ NOT NULL DEFAULT now(),
   geom                  GEOMETRY(Geometry, 4326) NOT NULL
@@ -83,87 +103,156 @@ CREATE_INDEX_SQL = (
   f"CREATE INDEX IF NOT EXISTS {TABLE_NAME}_forecast_datetime_idx ON {TABLE_NAME} (forecast_datetime)",
 )
 
-# All sample rows carry the same parameter, so its language structs are shared
-# rather than repeated per row.
-_TEMPERATURE = {
-  "de": "Temperatur",
-  "fr": "Température",
-  "it": "Temperatura",
-  "en": "Temperature",
-}
+# How many rows are handed to the server per INSERT round trip. The committed
+# subset is a few thousand rows, which is slow enough one at a time to be worth
+# batching but small enough not to need COPY.
+SEED_BATCH_SIZE = 1000
 
-# Sample features for local development: one hourly temperature reading per
-# MeteoSwiss station. external_id is derived by _external_id() rather than
-# spelled out here, so it cannot drift from the columns it is built from.
-# geom_sql is a PostGIS constructor expression rather than a bound parameter,
-# since each row uses a different one.
-SAMPLE_FEATURES = (
-  {
-    "parameter_shortname": "dkl010h0",
-    "parameter_description": _TEMPERATURE,
-    "parameter_group": _TEMPERATURE,
-    "value": 2.4,
-    "point_id": 1,
-    "point_type": 1,
-    "point_name": {"de": "Bern", "fr": "Berne", "it": "Berna", "en": "Bern"},
-    "station_abbr": "BER",
-    "forecast_datetime": "2026-01-15T12:00:00Z",
-    "created": "2026-01-15T10:00:00Z",
-    "geom_sql": "ST_SetSRID(ST_MakePoint(7.4643, 46.9908), 4326)",
-  },
-  {
-    "parameter_shortname": "dkl010h0",
-    "parameter_description": _TEMPERATURE,
-    "parameter_group": _TEMPERATURE,
-    "value": 1.8,
-    "point_id": 2,
-    "point_type": 1,
-    "point_name": {"de": "Zürich", "fr": "Zurich", "it": "Zurigo", "en": "Zurich"},
-    "station_abbr": "SMA",
-    "forecast_datetime": "2026-01-16T12:00:00Z",
-    "created": "2026-01-16T10:00:00Z",
-    "geom_sql": "ST_SetSRID(ST_MakePoint(8.5659, 47.3782), 4326)",
-  },
-  {
-    "parameter_shortname": "dkl010h0",
-    "parameter_description": _TEMPERATURE,
-    "parameter_group": _TEMPERATURE,
-    "value": 3.1,
-    "point_id": 3,
-    "point_type": 1,
-    "point_name": {"de": "Genf", "fr": "Genève", "it": "Ginevra", "en": "Geneva"},
-    "station_abbr": "GVE",
-    "forecast_datetime": "2026-01-17T12:00:00Z",
-    "created": "2026-01-17T10:00:00Z",
-    "geom_sql": "ST_SetSRID(ST_MakePoint(6.1275, 46.2475), 4326)",
-  },
-  {
-    "parameter_shortname": "dkl010h0",
-    "parameter_description": _TEMPERATURE,
-    "parameter_group": _TEMPERATURE,
-    "value": 2.9,
-    "point_id": 4,
-    "point_type": 1,
-    "point_name": {"de": "Basel", "fr": "Bâle", "it": "Basilea", "en": "Basel"},
-    "station_abbr": "BAS",
-    "forecast_datetime": "2026-01-18T12:00:00Z",
-    "created": "2026-01-18T10:00:00Z",
-    "geom_sql": "ST_SetSRID(ST_MakePoint(7.5836, 47.5413), 4326)",
-  },
-  {
-    "parameter_shortname": "dkl010h0",
-    "parameter_description": _TEMPERATURE,
-    "parameter_group": _TEMPERATURE,
-    "value": 6.2,
-    "point_id": 5,
-    "point_type": 1,
-    "point_name": {"de": "Lugano", "fr": "Lugano", "it": "Lugano", "en": "Lugano"},
-    "station_abbr": "LUG",
-    "forecast_datetime": "2026-01-19T12:00:00Z",
-    "created": "2026-01-19T10:00:00Z",
-    "geom_sql": "ST_SetSRID(ST_MakePoint(8.9601, 46.0037), 4326)",
-  },
-)
+# The committed subset of the MeteoSwiss OGD local-forecasting export: three
+# semicolon-delimited CSVs that keep the export's own column layout and file
+# names. See sample-data/README.md for provenance, make_sample_data.py to rebuild
+# it. UTF-8 here, though the upstream export is cp1252.
+SAMPLE_DATA_DIR = Path(__file__).resolve().parent / "sample-data"
+SAMPLE_DATA_ENCODING = "utf-8"
+SAMPLE_DATA_DELIMITER = ";"
+
+POINT_META_CSV = SAMPLE_DATA_DIR / "ogd-local-forecasting_meta_point.csv"
+PARAMETER_META_CSV = SAMPLE_DATA_DIR / "ogd-local-forecasting_meta_parameters.csv"
+
+# Every other CSV in the directory is a set of forecast values: one file per (run,
+# parameter), with both carried in the file name --
+# ``vnut12.lssw.202608200000.tre200h0.csv`` is the tre200h0 values of the run made
+# at 2026-08-20T00:00Z. The run time appears nowhere inside the file, and the
+# values column is named after the parameter, so the name has to be parsed to read
+# the file at all.
+FORECAST_FILENAME_RE = re.compile(r"^[^.]+\.[^.]+\.(?P<run>\d{12})\.(?P<parameter>[^.]+)\.csv$")
+
+# Both the run stamp in the file name and the `Date` column are YYYYMMDDHHMM. The
+# export carries no offset; MeteoSwiss publishes UTC.
+SAMPLE_TIMESTAMP_FORMAT = "%Y%m%d%H%M"
+
+# The languages behind the *_de/_fr/_it/_en column families, and so the keys of
+# the JSONB language structs built from them.
+LANGUAGES = ("de", "fr", "it", "en")
+
+
+def _iter_csv(path: Path) -> Iterator[dict[str, str]]:
+  """Stream a sample-data CSV row by row.
+
+  A full (non-subset) run is ~1.2 M rows, so nothing here reads a value file into
+  memory whole.
+  """
+  with path.open(encoding=SAMPLE_DATA_ENCODING, newline="") as handle:
+    yield from csv.DictReader(handle, delimiter=SAMPLE_DATA_DELIMITER)
+
+
+def _parse_timestamp(stamp: str) -> datetime:
+  return datetime.strptime(stamp, SAMPLE_TIMESTAMP_FORMAT).replace(tzinfo=UTC)
+
+
+def _lang_struct(row: dict[str, str], prefix: str) -> dict[str, str]:
+  """Collect a `<prefix>_de` / `_fr` / `_it` / `_en` column family into one JSONB struct."""
+  return {language: row[f"{prefix}_{language}"] for language in LANGUAGES}
+
+
+def _optional(value: str) -> str | None:
+  """Map the export's empty strings to NULL.
+
+  station_abbr and postal_code are each populated for some point types only, and
+  the export leaves the others blank rather than absent.
+  """
+  return value.strip() or None
+
+
+def _load_parameters() -> dict[str, dict]:
+  """Index the parameter metadata by shortname, with its language structs prebuilt."""
+  return {
+    row["parameter_shortname"]: {
+      "parameter_unit": row["parameter_unit"],
+      "parameter_description": _lang_struct(row, "parameter_description"),
+      "parameter_group": _lang_struct(row, "parameter_group"),
+    }
+    for row in _iter_csv(PARAMETER_META_CSV)
+  }
+
+
+def _load_points() -> dict[tuple[int, int], dict]:
+  """Index the point metadata by (point_id, point_type), the export's real key.
+
+  point_id alone is not unique -- the same id recurs across point types. The
+  export also ships a handful of exact duplicate rows; keying them into a dict
+  collapses those.
+  """
+  return {
+    (int(row["point_id"]), int(row["point_type_id"])): {
+      "point_name": row["point_name"],
+      "point_type_name": _lang_struct(row, "point_type"),
+      "station_abbr": _optional(row["station_abbr"]),
+      "postal_code": _optional(row["postal_code"]),
+      "point_height_masl": float(row["point_height_masl"]),
+      "lon": float(row["point_coordinates_wgs84_lon"]),
+      "lat": float(row["point_coordinates_wgs84_lat"]),
+    }
+    for row in _iter_csv(POINT_META_CSV)
+  }
+
+
+def _forecast_files() -> list[tuple[Path, str, datetime]]:
+  """Find the value files, reading each one's parameter and run time off its name."""
+  files = []
+  for path in sorted(SAMPLE_DATA_DIR.glob("*.csv")):
+    match = FORECAST_FILENAME_RE.match(path.name)
+    if match is None:
+      # The two metadata files, which carry no run stamp.
+      continue
+    files.append((path, match["parameter"], _parse_timestamp(match["run"])))
+  if not files:
+    raise RuntimeError(f"no forecast value files found in {SAMPLE_DATA_DIR}")
+  return files
+
+
+def iter_sample_features() -> Iterator[dict]:
+  """Yield one seed feature per forecast value, joined to its point and parameter.
+
+  `created` is the forecast *run* time, so it is identical for every row of a
+  file: one run emits all of its steps at once. What varies within a point is
+  forecast_datetime and value -- which is what makes the sample data useful for
+  exercising OGC API `datetime=` filtering.
+
+  The language structs are shared references, not copies: every row of a file
+  carries the same parameter, and point_type_name comes from the point lookup.
+  """
+  parameters = _load_parameters()
+  points = _load_points()
+  undocumented = 0
+
+  for path, shortname, run in _forecast_files():
+    parameter = parameters.get(shortname)
+    if parameter is None:
+      raise RuntimeError(f"{path.name}: {PARAMETER_META_CSV.name} has no row for parameter {shortname}")
+
+    for row in _iter_csv(path):
+      point_id = int(row["point_id"])
+      point_type = int(row["point_type_id"])
+      point = points.get((point_id, point_type))
+      if point is None:
+        # No metadata means no coordinates, and geom is NOT NULL. The full export
+        # has a few such points; the committed subset has none.
+        undocumented += 1
+        continue
+      yield {
+        "parameter_shortname": shortname,
+        "value": float(row[shortname]),
+        "point_id": point_id,
+        "point_type": point_type,
+        "forecast_datetime": _parse_timestamp(row["Date"]),
+        "created": run,
+        **parameter,
+        **point,
+      }
+
+  if undocumented:
+    logger.warning("skipped %d forecast value(s) whose point has no metadata, hence no coordinates", undocumented)
 
 
 def _external_id(feature: dict) -> str:
@@ -173,13 +262,12 @@ def _external_id(feature: dict) -> str:
   the timestamp is normalised to UTC and rendered as ``YYYYMMDDHHMMSS`` so the
   id carries none of the ISO-8601 separators::
 
-      1_1_dkl010h0_20260115120000
+      1_1_tre200h0_20260819210000
 
-  Parsing rather than string-stripping the timestamp keeps the id correct for a
-  row written with a numeric UTC offset (``+01:00``) instead of a ``Z`` suffix.
+  point_id is not unique on its own in the source data -- the same id recurs
+  across point types -- so point_type is part of the key rather than decoration.
   """
-  forecast = datetime.fromisoformat(feature["forecast_datetime"])
-  compact = forecast.astimezone(UTC).strftime("%Y%m%d%H%M%S")
+  compact = feature["forecast_datetime"].astimezone(UTC).strftime("%Y%m%d%H%M%S")
   return f"{feature['point_id']}_{feature['point_type']}_{feature['parameter_shortname']}_{compact}"
 
 
@@ -295,34 +383,52 @@ def ensure_schema(dbname: str, owner: str, owner_password: str, seed: bool) -> N
 
 def _seed_sample_data(cur: cursor) -> None:
   """Insert the local-dev sample features, leaving existing rows untouched."""
-  logger.info("seeding %d sample features", len(SAMPLE_FEATURES))
-  for feature in SAMPLE_FEATURES:
-    # geom_sql is a trusted constant from SAMPLE_FEATURES, never user input.
-    statement = sql.SQL(
-      "INSERT INTO {table} ("
-      "external_id, parameter_shortname, parameter_description, parameter_group, "
-      "value, point_id, point_type, point_name, station_abbr, forecast_datetime, "
-      "created, geom"
-      ") "
-      "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, {geom}) "
-      "ON CONFLICT (external_id) DO NOTHING"
-    ).format(table=sql.Identifier(TABLE_NAME), geom=sql.SQL(feature["geom_sql"]))
-    cur.execute(
-      statement,
-      (
+  logger.info("seeding sample features from %s", SAMPLE_DATA_DIR)
+
+  statement = sql.SQL(
+    "INSERT INTO {table} ("
+    "external_id, parameter_shortname, parameter_description, parameter_group, "
+    "parameter_unit, value, point_id, point_type, point_name, point_type_name, "
+    "station_abbr, postal_code, point_height_masl, forecast_datetime, created, geom"
+    ") VALUES %s "
+    "ON CONFLICT (external_id) DO NOTHING"
+  ).format(table=sql.Identifier(TABLE_NAME))
+
+  # The geometry is assembled from bound lon/lat parameters rather than a
+  # per-row SQL fragment, so no part of the sample data is ever interpolated into
+  # the statement text.
+  template = "(" + ", ".join(["%s"] * 15) + ", ST_SetSRID(ST_MakePoint(%s, %s), 4326))"
+
+  # Counted while streaming rather than up front: the row count is a property of
+  # the CSVs, and nothing needs them all in memory to find it out.
+  seeded = 0
+
+  def rows() -> Iterator[tuple]:
+    nonlocal seeded
+    for feature in iter_sample_features():
+      seeded += 1
+      yield (
         _external_id(feature),
         feature["parameter_shortname"],
         json.dumps(feature["parameter_description"]),
         json.dumps(feature["parameter_group"]),
+        feature["parameter_unit"],
         feature["value"],
         feature["point_id"],
         feature["point_type"],
-        json.dumps(feature["point_name"]),
+        feature["point_name"],
+        json.dumps(feature["point_type_name"]),
         feature["station_abbr"],
+        feature["postal_code"],
+        feature["point_height_masl"],
         feature["forecast_datetime"],
         feature["created"],
-      ),
-    )
+        feature["lon"],
+        feature["lat"],
+      )
+
+  extras.execute_values(cur, statement, rows(), template=template, page_size=SEED_BATCH_SIZE)
+  logger.info("seeded %d sample feature(s)", seeded)
 
 
 def main() -> int:

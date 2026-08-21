@@ -13,16 +13,27 @@ credentials mounted from `service-oa-features-secrets-db-admin`.
 The role, database and PostGIS steps are idempotent and may re-run on every pod
 start.
 
-WARNING: the table step is *destructive*. `sample_features` is dropped and
-recreated on every run, so every row is lost each time this script executes --
-including on an ordinary pod restart in a deployed environment.
+Two feature tables are created, holding the same readings in different
+coordinate reference systems:
+
+* `sample_features`      -- geometry in WGS84 (EPSG:4326)
+* `sample_features_lv95` -- geometry in CH1903+ / LV95 (EPSG:2056)
+
+Each backs one collection in pygeoapi-config.yml, and each collection declares
+its table's SRID as its `storage_crs`, so neither read path reprojects. Both
+coordinate pairs are published by the source export, so the LV95 rows are
+MeteoSwiss's own easting/northing rather than a transform of the degrees.
+
+WARNING: the table step is *destructive*. Both tables are dropped and recreated
+on every run, so every row is lost each time this script executes -- including
+on an ordinary pod restart in a deployed environment.
 
 Work is split across two identities on purpose:
 
 * the admin user (`DB_ADMIN_USER`, an rds_superuser) creates the role, the
   database and the PostGIS extension -- all of which need privileges the owner
   role does not have;
-* the owner role (`DB_USER`) drops and recreates the table and indexes, so that
+* the owner role (`DB_USER`) drops and recreates the tables and indexes, so that
   the role pygeoapi connects as actually owns the schema objects it reads and
   writes.
 
@@ -53,29 +64,54 @@ logger = logging.getLogger("init_database")
 # CREATE EXTENSION postgis.
 ADMIN_DBNAME = "postgres"
 
+# The WGS84 table and the LV95 table hold the same readings; they differ only in
+# the SRID of `geom` and in which pair of source columns it is built from. Each
+# backs one collection in pygeoapi-config.yml, so neither read path reprojects.
 TABLE_NAME = "sample_features"
+TABLE_NAME_LV95 = "sample_features_lv95"
 
-# Dropped and rebuilt on every run, so the table always matches the definition
-# below rather than whatever an earlier version of this script left behind.
-# NOTE: this discards all existing rows -- see the data-loss warning in the
-# module docstring.
-DROP_TABLE_SQL = f"DROP TABLE IF EXISTS {TABLE_NAME}"
+WGS84_SRID = 4326
+LV95_SRID = 2056
 
-# parameter_description, parameter_group and point_type_name are JSONB language
-# structs ({"de": …, "fr": …}); the provider collapses them to the requested
-# language via pygeoapi's l10n. Everything else is a plain scalar.
-#
-# The columns mirror the MeteoSwiss OGD local-forecasting CSVs the sample data is
-# read from (see SAMPLE_DATA_DIR). Two consequences worth knowing:
-#
-# * point_name is TEXT, not a language struct. The source ships a single name per
-#   point ("Arosa", "Delémont"), and it is point_type that carries the localised
-#   labels -- hence the separate point_type_name column.
-# * point_id alone is not unique; the source key is (point_id, point_type), which
-#   is why external_id is built from both. station_abbr and postal_code are only
-#   populated for some point types, so both stay nullable.
-CREATE_TABLE_SQL = f"""
-CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
+# (table, srid, feature keys holding the x/y for that srid). The key pairs index
+# into the dicts iter_sample_features() yields.
+TABLES = (
+  (TABLE_NAME, WGS84_SRID, ("lon", "lat")),
+  (TABLE_NAME_LV95, LV95_SRID, ("east", "north")),
+)
+
+
+def _drop_table_sql(table: str) -> str:
+  """Dropped and rebuilt on every run, so the table always matches the definition
+  below rather than whatever an earlier version of this script left behind.
+
+  NOTE: this discards all existing rows -- see the data-loss warning in the
+  module docstring.
+  """
+  return f"DROP TABLE IF EXISTS {table}"
+
+
+def _create_table_sql(table: str, srid: int) -> str:
+  """parameter_description, parameter_group and point_type_name are JSONB language
+  structs ({"de": …, "fr": …}); the provider collapses them to the requested
+  language via pygeoapi's l10n. Everything else is a plain scalar.
+
+  The columns mirror the MeteoSwiss OGD local-forecasting CSVs the sample data is
+  read from (see SAMPLE_DATA_DIR). Two consequences worth knowing:
+
+  * point_name is TEXT, not a language struct. The source ships a single name per
+    point ("Arosa", "Delémont"), and it is point_type that carries the localised
+    labels -- hence the separate point_type_name column.
+  * point_id alone is not unique; the source key is (point_id, point_type), which
+    is why external_id is built from both. station_abbr and postal_code are only
+    populated for some point types, so both stay nullable.
+
+  `geom` is typed to `srid` so PostGIS rejects a mismatched geometry at write
+  time rather than storing coordinates that silently disagree with the column's
+  declared CRS.
+  """
+  return f"""
+CREATE TABLE IF NOT EXISTS {table} (
   external_id           TEXT PRIMARY KEY,
   parameter_shortname   TEXT,
   parameter_description JSONB,
@@ -91,17 +127,20 @@ CREATE TABLE IF NOT EXISTS {TABLE_NAME} (
   point_height_masl     FLOAT,
   forecast_datetime     TIMESTAMPTZ NOT NULL,
   created               TIMESTAMPTZ NOT NULL DEFAULT now(),
-  geom                  GEOMETRY(Geometry, 4326) NOT NULL
+  geom                  GEOMETRY(Geometry, {srid}) NOT NULL
 )
 """
 
-CREATE_INDEX_SQL = (
-  f"CREATE INDEX IF NOT EXISTS {TABLE_NAME}_geom_idx ON {TABLE_NAME} USING GIST (geom)",
-  f"CREATE INDEX IF NOT EXISTS {TABLE_NAME}_created_idx ON {TABLE_NAME} (created)",
-  # forecast_datetime is the collection's time_field, so this is the index that
-  # backs OGC API datetime= filtering.
-  f"CREATE INDEX IF NOT EXISTS {TABLE_NAME}_forecast_datetime_idx ON {TABLE_NAME} (forecast_datetime)",
-)
+
+def _create_index_sql(table: str) -> tuple[str, ...]:
+  return (
+    f"CREATE INDEX IF NOT EXISTS {table}_geom_idx ON {table} USING GIST (geom)",
+    f"CREATE INDEX IF NOT EXISTS {table}_created_idx ON {table} (created)",
+    # forecast_datetime is the collection's time_field, so this is the index that
+    # backs OGC API datetime= filtering.
+    f"CREATE INDEX IF NOT EXISTS {table}_forecast_datetime_idx ON {table} (forecast_datetime)",
+  )
+
 
 # How many rows are handed to the server per INSERT round trip. The committed
 # subset is a few thousand rows, which is slow enough one at a time to be worth
@@ -182,6 +221,11 @@ def _load_points() -> dict[tuple[int, int], dict]:
   point_id alone is not unique -- the same id recurs across point types. The
   export also ships a handful of exact duplicate rows; keying them into a dict
   collapses those.
+
+  Both coordinate pairs are read straight from the export, which publishes each
+  point in WGS84 *and* LV95. Nothing here reprojects: the LV95 table is seeded
+  from MeteoSwiss's own easting/northing rather than from a transform of the
+  degrees, so neither table's coordinates are derived from the other's.
   """
   return {
     (int(row["point_id"]), int(row["point_type_id"])): {
@@ -192,6 +236,8 @@ def _load_points() -> dict[tuple[int, int], dict]:
       "point_height_masl": float(row["point_height_masl"]),
       "lon": float(row["point_coordinates_wgs84_lon"]),
       "lat": float(row["point_coordinates_wgs84_lat"]),
+      "east": float(row["point_coordinates_lv95_east"]),
+      "north": float(row["point_coordinates_lv95_north"]),
     }
     for row in _iter_csv(POINT_META_CSV)
   }
@@ -355,9 +401,9 @@ def ensure_postgis(dbname: str, owner: str) -> None:
 
 
 def ensure_schema(dbname: str, owner: str, owner_password: str, seed: bool) -> None:
-  """Recreate the feature table and indexes, and optionally seed sample data.
+  """Recreate the feature tables and indexes, and optionally seed sample data.
 
-  The table is dropped first, so any existing rows are discarded.
+  Each table in TABLES is dropped first, so any existing rows are discarded.
 
   Connects as the owner role rather than the admin user so that the objects are
   owned by the role pygeoapi actually connects as -- otherwise every table would
@@ -366,24 +412,31 @@ def ensure_schema(dbname: str, owner: str, owner_password: str, seed: bool) -> N
   conn = _connect(dbname, user=owner, password=owner_password)
   try:
     with conn.cursor() as cur:
-      logger.warning("dropping table %s and all its rows", TABLE_NAME)
-      cur.execute(DROP_TABLE_SQL)
-      logger.info("creating table %s", TABLE_NAME)
-      cur.execute(CREATE_TABLE_SQL)
-      for statement in CREATE_INDEX_SQL:
-        cur.execute(statement)
+      for table, srid, coord_keys in TABLES:
+        logger.warning("dropping table %s and all its rows", table)
+        cur.execute(_drop_table_sql(table))
+        logger.info("creating table %s (srid %d)", table, srid)
+        cur.execute(_create_table_sql(table, srid))
+        for statement in _create_index_sql(table):
+          cur.execute(statement)
 
-      if seed:
-        _seed_sample_data(cur)
-      else:
+        if seed:
+          _seed_sample_data(cur, table, srid, coord_keys)
+
+      if not seed:
         logger.info("skipping sample data (set DB_SEED_SAMPLE_DATA=true to enable)")
   finally:
     conn.close()
 
 
-def _seed_sample_data(cur: cursor) -> None:
-  """Insert the local-dev sample features, leaving existing rows untouched."""
-  logger.info("seeding sample features from %s", SAMPLE_DATA_DIR)
+def _seed_sample_data(cur: cursor, table: str, srid: int, coord_keys: tuple[str, str]) -> None:
+  """Insert the local-dev sample features, leaving existing rows untouched.
+
+  `coord_keys` names the pair of feature keys holding this table's coordinates --
+  ("lon", "lat") for WGS84, ("east", "north") for LV95 -- both of which come
+  straight from the export. The rows are otherwise identical between tables.
+  """
+  logger.info("seeding %s from %s", table, SAMPLE_DATA_DIR)
 
   statement = sql.SQL(
     "INSERT INTO {table} ("
@@ -392,12 +445,14 @@ def _seed_sample_data(cur: cursor) -> None:
     "station_abbr, postal_code, point_height_masl, forecast_datetime, created, geom"
     ") VALUES %s "
     "ON CONFLICT (external_id) DO NOTHING"
-  ).format(table=sql.Identifier(TABLE_NAME))
+  ).format(table=sql.Identifier(table))
 
-  # The geometry is assembled from bound lon/lat parameters rather than a
-  # per-row SQL fragment, so no part of the sample data is ever interpolated into
-  # the statement text.
-  template = "(" + ", ".join(["%s"] * 15) + ", ST_SetSRID(ST_MakePoint(%s, %s), 4326))"
+  # The geometry is assembled from bound x/y parameters rather than a per-row SQL
+  # fragment, so no part of the sample data is ever interpolated into the
+  # statement text. srid is an int constant from TABLES, never user input.
+  template = "(" + ", ".join(["%s"] * 15) + f", ST_SetSRID(ST_MakePoint(%s, %s), {srid}))"
+
+  x_key, y_key = coord_keys
 
   # Counted while streaming rather than up front: the row count is a property of
   # the CSVs, and nothing needs them all in memory to find it out.
@@ -423,12 +478,12 @@ def _seed_sample_data(cur: cursor) -> None:
         feature["point_height_masl"],
         feature["forecast_datetime"],
         feature["created"],
-        feature["lon"],
-        feature["lat"],
+        feature[x_key],
+        feature[y_key],
       )
 
   extras.execute_values(cur, statement, rows(), template=template, page_size=SEED_BATCH_SIZE)
-  logger.info("seeded %d sample feature(s)", seeded)
+  logger.info("seeded %d sample feature(s) into %s", seeded, table)
 
 
 def main() -> int:

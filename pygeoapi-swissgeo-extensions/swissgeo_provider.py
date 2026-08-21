@@ -1,7 +1,7 @@
 """SwissGeo PostGIS feature provider for OGC API Features.
 
 Extends PostgreSQLProvider with language-aware field selection:
-``parameter_description``, ``parameter_group`` and ``point_name`` arrive as
+``parameter_description``, ``parameter_group`` and ``point_type_name`` arrive as
 per-language JSONB objects (``{"de": …, "fr": …}``) and are collapsed to the
 language pygeoapi resolves (passed in via the ``language`` kwarg) using
 ``pygeoapi.l10n.translate``, before handing results back to pygeoapi.
@@ -47,7 +47,11 @@ _SUPPORTED_LANGS = {"de", "en", "fr", "it"}
 
 # Columns stored as per-language JSONB objects, collapsed by _translate_props().
 # Must stay in sync with the table definition in scripts/init_database.py.
-_LANG_STRUCT_FIELDS = ("parameter_description", "parameter_group", "point_name")
+#
+# point_name is deliberately absent: the MeteoSwiss source ships one name per
+# point rather than a per-language struct, so it is plain TEXT and passes
+# through untranslated. point_type_name carries the localised label instead.
+_LANG_STRUCT_FIELDS = ("parameter_description", "parameter_group", "point_type_name")
 
 _local = threading.local()
 

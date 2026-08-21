@@ -64,10 +64,10 @@ metadata:
     role: pointOfContact
 
 resources:
-  swissgeo-features:
+  sample-mch-param:
     type: collection
-    title: SWISSGEO Features
-    description: Swiss geodata features
+    title: Sample MCH Parameter
+    description: Sample MCH Parameter
     keywords: [switzerland, geodata, features, swisstopo]
     links:
       - type: text/html

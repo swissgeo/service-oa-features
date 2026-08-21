@@ -1,0 +1,101 @@
+point_id;point_type_id;station_abbr;postal_code;point_name;point_type_de;point_type_fr;point_type_it;point_type_en;point_height_masl;point_coordinates_lv95_east;point_coordinates_lv95_north;point_coordinates_wgs84_lat;point_coordinates_wgs84_lon
+1;1;ARO;;Arosa;Station;Station;Stazione;Station;1878.0;2771031.0;1184830.0;46.792661;9.679014
+19;1;GRC;;Grächen;Station;Station;Stazione;Station;1605.0;2630738.0;1116062.0;46.195314;7.836822
+35;1;SAE;;Säntis;Station;Station;Stazione;Station;2501.0;2744188.0;1234920.0;47.249447;9.343469
+51;1;NEU;;Neuchâtel;Station;Station;Stazione;Station;485.0;2563087.0;1205560.0;47.000067;6.953297
+67;1;BUS;;Buchs / Aarau;Station;Station;Stazione;Station;387.0;2648396.0;1248370.0;47.384381;8.07955
+82;1;TAE;;Aadorf / Tänikon;Station;Station;Stazione;Station;539.0;2710518.0;1259824.0;47.479892;8.904928
+106;1;LOH;;Lohn, SH;Station;Station;Stazione;Station;585.0;2692911.0;1289775.0;47.751944;8.677636
+181;1;STC;;St. Chrischona;Station;Station;Stazione;Station;493.0;2618696.0;1269037.0;47.571767;7.687094
+257;1;LEU;;Leukerbad;Station;Station;Stazione;Station;1286.0;2614083.0;1135090.0;46.367036;7.621639
+311;1;HUT;;Huttwil;Station;Station;Stazione;Station;633.0;2630261.0;1218189.0;47.114003;7.837364
+384;1;FIO;;Fionnay;Station;Station;Stazione;Station;1500.0;2589959.0;1097765.0;46.03135;7.308961
+429;1;KIS;;Kiesen;Station;Station;Stazione;Station;535.0;2610256.0;1185527.0;46.820811;7.573036
+516;1;BEX;;Bex;Station;Station;Stazione;Station;402.0;2565805.0;1121511.0;46.244167;6.995286
+647;1;SUA;;Schaan;Station;Station;Stazione;Station;444.0;2755511.0;1228260.0;47.186989;9.490686
+738;1;THU;;Thun;Station;Station;Stazione;Station;570.0;2611201.0;1177640.0;46.749853;7.585222
+803;1;OED;;Ehrendingen;Station;Station;Stazione;Station;428.0;2667833.0;1262320.0;47.508125;8.339047
+859;1;SPF;;Schüpfheim;Station;Station;Stazione;Station;744.0;2643684.0;1199711.0;46.947042;8.012442
+1118;1;VIO;;Vicosoprano;Station;Station;Stazione;Station;1089.0;2768487.0;1135866.0;46.353019;9.6278
+1741;1;ZELUME;;Menznau;Station;Station;Stazione;Station;579.0;2644360.0;1215720.0;47.091;8.022881
+1758;1;ZELUHR;;Hildisrieden;Station;Station;Stazione;Station;710.0;2659054.0;1224318.0;47.167186;8.217519
+1780;1;ZHAAT;;Aathal;Station;Station;Stazione;Station;496.0;2700252.0;1243788.0;47.337325;8.76515
+1815;1;ZHUHW;;Flurlingen / Rastplatz Buchhalde;Station;Station;Stazione;Station;464.0;2689407.0;1281339.0;47.676575;8.629211
+1832;1;ZHWEI;;Weiningen / Limmatthaler-Kreuz;Station;Station;Stazione;Station;407.0;2674844.0;1251648.0;47.411389;8.430311
+3956;1;NABHAE;;Härkingen;Station;Station;Stazione;Station;431.0;2628865.0;1240180.0;47.311867;7.820381
+3978;1;ZHHOF;;Hofstetten / Schümberg;Station;Station;Stazione;Station;737.0;2707241.0;1258315.0;47.466861;8.861092
+4040;1;TIMOL;;Moleno;Station;Station;Stazione;Station;255.0;2719940.0;1126559.0;46.279747;8.994842
+4195;1;ZHHED;;Zwillikon / Jonentobelbrücke;Station;Station;Stazione;Station;467.0;2674801.0;1238664.0;47.294619;8.427575
+4294;1;VSBWA;;Brig / Wase;Station;Station;Stazione;Station;1945.0;2647485.0;1125950.0;46.283283;8.05475
+4313;1;VSSTA;;Stafel;Station;Station;Stazione;Station;2183.0;2618600.0;1094808.0;46.004569;7.678739
+4335;1;BOBEGH;;Grauholz;Station;Station;Stazione;Station;599.0;2603772.0;1205297.0;46.998719;7.488231
+4361;1;BONEPS;;Pont de Sorges;Station;Station;Stazione;Station;702.0;2558902.0;1207684.0;47.018931;6.898083
+4381;1;BOSZMN;;Mosi-Nord;Station;Station;Stazione;Station;445.0;2689951.0;1205850.0;46.997606;8.621306
+4406;1;BOVDOU;;Oulens;Station;Station;Stazione;Station;588.0;2533069.0;1166172.0;46.643428;6.564408
+4464;1;MMDAS;;Därstetten;Station;Station;Stazione;Station;755.0;2604225.0;1167400.0;46.657819;7.493836
+4483;1;MMSAP;;Safien / Thalkirch;Station;Station;Stazione;Station;1700.0;2740748.0;1166142.0;46.631686;9.276756
+4500;1;VSISE;;Isérables;Station;Station;Stazione;Station;1237.0;2585331.0;1112179.0;46.160928;7.248742
+4652;1;GLNET;;Netstal;Station;Station;Stazione;Station;498.0;2722362.0;1212895.0;47.055778;9.049244
+4753;1;MMGTT;;Guttannen;Station;Station;Stazione;Station;1054.0;2665104.0;1167542.0;46.655936;8.289192
+4880;1;MMSVG;;Savognin;Station;Station;Stazione;Station;1168.0;2764915.0;1162900.0;46.597006;9.591058
+4981;1;BEBUE;;Burgdorf / Einschlag;Station;Station;Stazione;Station;545.0;2614450.0;1210254.0;47.043161;7.628783
+10105;1;VSMAT;;Mattsand;Station;Station;Stazione;Station;1230.0;2627249.0;1110279.0;46.143439;7.791289
+10121;1;TGDIE;;Diessenhofen;Station;Station;Stazione;Station;421.0;2698976.0;1281905.0;47.680289;8.756739
+10141;1;LUSCH;;Schüpfheim;Station;Station;Stazione;Station;761.0;2644501.0;1200940.0;46.958044;8.023281
+10157;1;AXPPAN;;Panix;Station;Station;Stazione;Station;1456.0;2727626.0;1187430.0;46.825772;9.111364
+10179;1;AXPZER;;Zermeiggern;Station;Station;Stazione;Station;1740.0;2640104.0;1103515.0;46.081953;7.957072
+10234;1;BOZHF2;;Flughafen Zürich_16.6;Station;Station;Stazione;Station;420.0;2684118.0;1256009.0;47.449486;8.554
+10279;1;AGTGI;;Turgi;Station;Station;Stazione;Station;348.0;2662517.0;1259908.0;47.486961;8.26815
+10302;1;BOVDBR;;Arrissoules;Station;Station;Stazione;Station;633.0;2551240.0;1183917.0;46.804625;6.799856
+10318;1;BOVDDA;;Daillard;Station;Station;Stazione;Station;800.0;2523621.0;1176419.0;46.734586;6.439311
+10335;1;VDCHX;;Château d'Oex;Station;Station;Stazione;Station;900.0;2576150.0;1146190.0;46.466614;7.128136
+10352;1;VDPPI;;Villeneuve, Le Pissot;Station;Station;Stazione;Station;500.0;2561790.0;1138170.0;46.393806;6.94185
+10373;1;BOGRAN;;Andeer;Station;Station;Stazione;Station;1014.0;2752596.0;1162661.0;46.597783;9.430264
+10514;1;BOSGMO;;Oberriet / Moos;Station;Station;Stazione;Station;427.0;2759569.0;1242155.0;47.310956;9.54915
+10782;1;GRGRO;;Grono;Station;Station;Stazione;Station;333.0;2731840.0;1123214.0;46.247436;9.148239
+10802;1;AGSIN;;Sins;Station;Station;Stazione;Station;397.0;2672912.0;1228032.0;47.199208;8.400881
+10894;1;VSMAS;;Massongex;Station;Station;Stazione;Station;398.0;2564940.0;1121275.0;46.241997;6.984086
+10955;1;AGSUL;;Sulz;Station;Station;Stazione;Station;352.0;2649607.0;1266007.0;47.542914;8.097542
+20471;1;BOBEBO;;Bönigen;Station;Station;Stazione;Station;599.0;2636327.0;1170712.0;46.686636;7.913497
+20823;1;AGBBA;;Baden;Station;Station;Stazione;Station;396.0;2665320.0;1258000.0;47.469528;8.305061
+20858;1;BOVSTP;;Sembrancher / Trappistes;Station;Station;Stazione;Station;690.0;2576259.0;1103091.0;46.078917;7.131753
+100025;2;;1000;Lausanne 25;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;837.0;2542061.0;1156539.0;46.557622;6.683067
+124300;2;;1243;Presinge;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;462.0;2508710.0;1119080.0;46.216975;6.255564
+148402;2;;1484;Granges-de-Vesin;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;518.0;2554425.0;1184538.0;46.810436;6.841517
+169500;2;;1695;Villarlod;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;838.0;2568233.0;1172548.0;46.703383;7.023256
+192100;2;;1921;Martigny-Croix;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;580.0;2569919.0;1103611.0;46.083342;7.049767
+234500;2;;2345;Les Breuleux;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;1029.0;2566919.0;1228874.0;47.209975;7.001978
+301400;2;;3014;Bern;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;556.0;2601337.0;1201236.0;46.962197;7.456203
+332600;2;;3326;Krauchthal;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;583.0;2609124.0;1206122.0;47.006086;7.558614
+378300;2;;3783;Grund b. Gstaad;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;1069.0;2587487.0;1144081.0;46.447947;7.275789
+410800;2;;4108;Witterswil;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;340.0;2606345.0;1259540.0;47.486592;7.522825
+462800;2;;4628;Wolfwil;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;423.0;2627053.0;1235385.0;47.268811;7.796122
+544500;2;;5445;Eggenwil;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;395.0;2668151.0;1246878.0;47.369217;8.340914
+621600;2;;6216;Mauensee;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;513.0;2648007.0;1224246.0;47.167433;8.071817
+659200;2;;6592;S. Antonino;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;216.0;2718841.0;1112806.0;46.156247;8.977083
+692700;2;;6927;Agra;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;566.0;2714353.0;1092006.0;45.969953;8.913936
+724200;2;;7242;Luzein;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;981.0;2777026.0;1199283.0;46.921044;9.763111
+811200;2;;8112;Otelfingen;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;440.0;2671838.0;1256865.0;47.458642;8.391325
+846000;2;;8460;Marthalen;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;407.0;2691340.0;1276197.0;47.630072;8.653886
+870400;2;;8704;Herrliberg;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;481.0;2688938.0;1238222.0;47.288892;8.614367
+910500;2;;9105;Schönengrund;Zentrum Postleitzahl;Centre code postal;Centro codice postale;Postal code center;832.0;2735041.0;1243492.0;47.328458;9.22525
+435;3;;;Schilthorn;Point of Interest;Point of Interest;Point of Interest;Point of Interest;2958.0;2630453.0;1156278.0;46.557089;7.835758
+466;3;;;Hollandiahütte (Lötschenhütte) SAC;Point of Interest;Point of Interest;Point of Interest;Point of Interest;3238.0;2640051.0;1147241.0;46.475294;7.960131
+497;3;;;Capanna Cadlimo CAS;Point of Interest;Point of Interest;Point of Interest;Point of Interest;2570.0;2696326.0;1158586.0;46.571611;8.695158
+529;3;;;Turtmannhütte SAC;Point of Interest;Point of Interest;Point of Interest;Point of Interest;2519.0;2620150.0;1112104.0;46.160111;7.699494
+560;3;;;Capanna Sasc Furä CAS;Point of Interest;Point of Interest;Point of Interest;Point of Interest;1904.0;2765107.0;1131579.0;46.315311;9.582397
+592;3;;;Grimselpass;Point of Interest;Point of Interest;Point of Interest;Point of Interest;2164.0;2668937.0;1157087.0;46.561511;8.337697
+623;3;;;Col du Marchairuz;Point of Interest;Point of Interest;Point of Interest;Point of Interest;1447.0;2508868.0;1156414.0;46.552806;6.250283
+654;3;;;Pétra Félix;Point of Interest;Point of Interest;Point of Interest;Point of Interest;1146.0;2516544.0;1168124.0;46.659125;6.348239
+686;3;;;Piz Vadret;Point of Interest;Point of Interest;Point of Interest;Point of Interest;3229.0;2793058.0;1173751.0;46.687031;9.9627
+717;3;;;Titlis;Point of Interest;Point of Interest;Point of Interest;Point of Interest;3238.0;2676312.0;1180581.0;46.772033;8.437781
+749;3;;;Wildstrubel;Point of Interest;Point of Interest;Point of Interest;Point of Interest;3244.0;2606921.0;1138777.0;46.400311;7.528633
+780;3;;;Höch Windgällen;Point of Interest;Point of Interest;Point of Interest;Point of Interest;2764.0;2703124.0;1193868.0;46.887931;8.791758
+811;3;;;Pizzo Lucendro;Point of Interest;Point of Interest;Point of Interest;Point of Interest;2963.0;2682909.0;1154749.0;46.538897;8.519472
+843;3;;;Alphubel;Point of Interest;Point of Interest;Point of Interest;Point of Interest;4206.0;2632903.0;1101349.0;46.062867;7.863831
+874;3;;;Piz Medel;Point of Interest;Point of Interest;Point of Interest;Point of Interest;3210.0;2712786.0;1164058.0;46.618247;8.911164
+1012;3;;;Vrenelisgärtli;Point of Interest;Point of Interest;Point of Interest;Point of Interest;2905.0;2720007.0;1207511.0;47.007794;9.016828
+1043;3;;;Pizzo Vogorno;Point of Interest;Point of Interest;Point of Interest;Point of Interest;2442.0;2712170.0;1121956.0;46.239689;8.892936
+1074;3;;;Capanna Brogoldone AACB;Point of Interest;Point of Interest;Point of Interest;Point of Interest;1910.0;2725250.0;1124780.0;46.262778;9.063233
+1106;3;;;Lötschenpasshütte;Point of Interest;Point of Interest;Point of Interest;Point of Interest;2690.0;2621390.0;1140589.0;46.416308;7.71685
+1137;3;;;Folluhorn;Point of Interest;Point of Interest;Point of Interest;Point of Interest;2656.0;2648344.0;1130145.0;46.320964;8.066336

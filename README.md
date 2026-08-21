@@ -131,6 +131,11 @@ recreated on every run**, so re-running it discards all existing rows — includ
 pod restart. The sample features are local-dev only and are inserted only when
 `DB_SEED_SAMPLE_DATA` is truthy, which compose sets and the deployed environments do not.
 
+The seed rows are read from the CSVs in `scripts/sample-data/` — a committed 3,360-row subset of
+the MeteoSwiss OGD local-forecasting export (140 points × 24 hourly steps). See that directory's
+README for what it contains and `scripts/make_sample_data.py` for how to rebuild it from a full
+export.
+
 To open a shell or re-apply the bootstrap against a running database:
 
 ```bash
@@ -168,6 +173,9 @@ pygeoapi-swissgeo-extensions/
   otel.py                 # OpenTelemetry setup
   settings.py             # pydantic-settings configuration
 pygeoapi-config.yml       # pygeoapi server + collection configuration
-scripts/init_database.py  # DB/role/PostGIS/schema bootstrap + local seed data
+scripts/
+  init_database.py        # DB/role/PostGIS/schema bootstrap + local seed data
+  make_sample_data.py     # Dev tool: rebuilds sample-data/ from the full OGD export
+  sample-data/            # Committed CSV subset the seeder reads
 tests/                    # Provider unit tests
 ```

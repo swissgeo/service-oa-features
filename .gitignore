@@ -1,6 +1,10 @@
 # application-specific
 .generated
 
+# The full MeteoSwiss OGD export (~32 MB) that scripts/make_sample_data.py reads.
+# Anchored to the repo root: scripts/sample-data/ is the committed subset.
+/sample-data/
+
 # editors
 .zed
 

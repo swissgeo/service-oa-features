@@ -51,6 +51,7 @@ ignore = [
     "ANN401", # Ignore Any typehint
     "ANN002", # Ignore typehint for *args
     "ANN003", # Ignore typehint for **kwargs
+    "CPY001", # Ignore missing per-file copyright notice, the license lives in LICENSE.md only
     "D",      # Ignore pydocstyle
     "EM",     # Ignore flake8-errmsg
     "TRY003", # Ignore long messages in exception constructors

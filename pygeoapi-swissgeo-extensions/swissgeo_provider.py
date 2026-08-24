@@ -94,7 +94,7 @@ class SwissGeoProvider(PostgreSQLProvider):
     self.resource_id = provider_def.get("resource_id", self.name)
 
   @_tracer.start_as_current_span("SwissGeoProvider.query")
-  def query(  # noqa: ANN201, PLR0913
+  def query(  # noqa: ANN201, PLR0913, PLR0917
     self,
     offset: int = 0,
     limit: int = 10,

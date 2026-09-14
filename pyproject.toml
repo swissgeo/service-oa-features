@@ -27,7 +27,7 @@ extra-paths = ["pygeoapi-swissgeo-extensions"]
 
 [dependency-groups]
 dev = [
-    "ruff==0.16.6",
+    "ruff==0.16.7",
     "ty",
     "pytest",
     "pytest-cov",

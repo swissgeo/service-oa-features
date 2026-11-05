@@ -1,15 +1,24 @@
 set shell := ["bash", "-c"]
 
-run-docker-compose:
-    docker compose up
+# Start PostGIS, collector, Jaeger, Prometheus and (re)apply the schema and sample data
+services-up:
+    make services-up
+
+# Stop the backing services (the PostGIS data volume is kept)
+services-down:
+    make services-down
+
+# Serve the application locally (needs `just services-up` first)
+serve:
+    make serve
 
 # Open a psql shell on the local PostGIS container
 dbshell:
-    docker compose exec postgres psql -U swissgeo -d swissgeo
+    make dbshell
 
 # Re-apply the PostGIS bootstrap schema/seed data to the running database
 reset-db:
-    docker compose run --rm init-database
+    make reset-db
 
 lint:
     uv run ruff check . --fix

@@ -1,26 +1,6 @@
+# Backing services for local development: PostGIS, the OTLP collector, Jaeger and
+# Prometheus. The app itself runs on the host (`make serve`) or via `make dockerrun`.
 services:
-  pygeoapi:
-    build: .
-    image: pygeoapi-custom
-    ports:
-      - "8080:8080"
-      - "5678:5678"
-    volumes:
-      - ./pygeoapi-config.yml:/pygeoapi/pygeoapi-config.yml
-      - ./config-files/logging-conf.yaml:/pygeoapi/config-files/logging-conf.yaml
-      - ./data:/pygeoapi/data
-    env_file:
-      - .env-docker
-    environment:
-      - PYDEBUG=${PYDEBUG}
-      - OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
-      - OTEL_EXPORTER_OTLP_INSECURE=true
-    depends_on:
-      init-database:
-        condition: service_completed_successfully
-      otel-collector:
-        condition: service_started
-
   postgres:
     image: postgis/postgis:17-3.5
     environment:
@@ -45,7 +25,6 @@ services:
   # because DB_SEED_SAMPLE_DATA is set -- the sample features.
   init-database:
     build: .
-    image: pygeoapi-custom
     entrypoint: ["python", "scripts/init_database.py"]
     environment:
       - DB_HOST=postgres

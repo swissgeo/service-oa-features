@@ -2,6 +2,7 @@ server:
   bind:
     host: 0.0.0.0
     port: 8080
+  # The defaults mirror pygeoapi_hostname and api_prefix in swissgeo_oaf/settings.py
   url: ${PYGEOAPI_HOSTNAME:-http://localhost:8080}${API_PREFIX:-/api/oaf/rc1}
   mimetype: application/json; charset=UTF-8
   encoding: utf-8
@@ -85,7 +86,7 @@ resources:
         trs: http://www.opengis.net/def/uom/ISO-8601/0/Gregorian
     providers:
       - type: feature
-        name: swissgeo_provider.SwissGeoProvider
+        name: swissgeo_oaf.provider.postgresql.SwissGeoProvider
         data:
           host: ${DB_HOST:-localhost}
           port: ${DB_PORT:-5432}
@@ -139,7 +140,7 @@ resources:
         trs: http://www.opengis.net/def/uom/ISO-8601/0/Gregorian
     providers:
       - type: feature
-        name: swissgeo_provider.SwissGeoProvider
+        name: swissgeo_oaf.provider.postgresql.SwissGeoProvider
         data:
           host: ${DB_HOST:-localhost}
           port: ${DB_PORT:-5432}

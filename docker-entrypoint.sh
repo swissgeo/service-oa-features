@@ -4,7 +4,11 @@ pygeoapi openapi generate pygeoapi-config.yml --output-file "${PYGEOAPI_OPENAPI:
 
 if [ "${PYDEBUG}" = "true" ]; then
     echo PYDEBUG mode enabled!
-    python -m debugpy --listen 0.0.0.0:5678 -m uvicorn app:APP --host 0.0.0.0 --port 8080 --app-dir /pygeoapi/pygeoapi-swissgeo-extensions --log-config /pygeoapi/config-files/logging-conf.yaml
+    if ! python -c "import debugpy" 2>/dev/null; then
+        echo "PYDEBUG requires an image built with --build-arg INSTALL_DEBUGPY=true" >&2
+        exit 1
+    fi
+    python -m debugpy --listen 0.0.0.0:5678 -m uvicorn swissgeo_oaf.app:APP --host 0.0.0.0 --port 8080 --log-config /pygeoapi/config-files/logging-conf.yaml
 else
-    uvicorn app:APP --host 0.0.0.0 --port 8080 --app-dir /pygeoapi/pygeoapi-swissgeo-extensions --log-config /pygeoapi/config-files/logging-conf.yaml
+    uvicorn swissgeo_oaf.app:APP --host 0.0.0.0 --port 8080 --log-config /pygeoapi/config-files/logging-conf.yaml
 fi

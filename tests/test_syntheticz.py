@@ -23,18 +23,18 @@ def _provider_def(table: str) -> dict:
         "name": _PROVIDER_NAME,
         "data": {"host": "localhost", "dbname": "swissgeo", "search_path": ["public"]},
         "table": table,
-        "id_field": "external_id",
+        "id_field": "id",
     }
 
 
 _RESOURCES = {
     "sample-mch-param": {
         "type": "collection",
-        "providers": [_provider_def("sample_features")],
+        "providers": [_provider_def("tbl_ogd-local-forecasting-tre200px")],
     },
-    "sample-mch-param-lv95": {
+    "point-meta": {
         "type": "collection",
-        "providers": [_provider_def("sample_features_lv95")],
+        "providers": [_provider_def("tbl_ogd-local-forecasting-point-meta")],
     },
     "other": {
         "type": "collection",
@@ -83,8 +83,8 @@ def test_syntheticz_up(client: TestClient, inspector: MagicMock) -> None:
         "external_systems": {"postgresql": {"status": "UP"}},
     }
     assert [call.args for call in inspector.has_table.call_args_list] == [
-        ("sample_features",),
-        ("sample_features_lv95",),
+        ("tbl_ogd-local-forecasting-tre200px",),
+        ("tbl_ogd-local-forecasting-point-meta",),
     ]
     assert {call.kwargs["schema"] for call in inspector.has_table.call_args_list} == {"public"}
 

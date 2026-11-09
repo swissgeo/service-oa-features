@@ -37,7 +37,9 @@ def main(tables: list[str]) -> int:
         with conn.cursor() as cur:
             missing = []
             for table in tables:
-                cur.execute("SELECT to_regclass(%s)", (table,))
+                # quote_ident so names that need quoting (e.g. ones with hyphens,
+                # like tbl_ogd-local-forecasting-tre200px) resolve rather than error.
+                cur.execute("SELECT to_regclass(quote_ident(%s))", (table,))
                 row = cur.fetchone()
                 if row is None or row[0] is None:
                     missing.append(table)

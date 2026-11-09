@@ -2,13 +2,16 @@
 # Prometheus. The app itself runs on the host (`make serve`) or via `make dockerrun`.
 services:
   postgres:
-    image: postgis/postgis:17-3.5
+    image: postgis/postgis:18-3.6
     environment:
       - POSTGRES_DB=swissgeo
       - POSTGRES_USER=swissgeo
       - POSTGRES_PASSWORD=swissgeo
+    # From 18 on, the image keeps its data in a major-version subdirectory
+    # (/var/lib/postgresql/18/docker) and expects the volume one level up. The
+    # volume is new rather than reused: a 17 data directory cannot be opened by 18.
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata-18:/var/lib/postgresql
     ports:
       - "5432:5432"
     healthcheck:
@@ -69,4 +72,4 @@ services:
       - COLLECTOR_OTLP_ENABLED=true
 
 volumes:
-  pgdata:
+  pgdata-18:

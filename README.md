@@ -45,22 +45,25 @@ SwissGeoProvider          ← swissgeo_oaf.provider.postgresql, extends PostgreS
   │  query() / get()
   ├─ reads lang from thread-local (set by app.py)
   ├─ calls super().query() / super().get()
-  ├─ _translate_props() – collapses the JSONB language structs
+  ├─ _translate_props() – collapses the per-language columns
   └─ _patch_links()     – appends ?lang=…&f=… to same-host links
   │
   ▼
-PostGIS  (sample_features / sample_features_lv95 tables)
+PostGIS  (tbl_ogd-local-forecasting-tre200px table, LV95)
 ```
 
 ## Language handling
 
-`parameter_description`, `parameter_group` and `point_type_name` are stored as JSONB language structs (`point_name` is plain text, as the source ships one name per point):
+`parameter_description`, `parameter_group` and `point_type` are stored as one column per language, as the MeteoSwiss source ships them (`point_name` is a single column, as the source ships one name per point):
 
-```json
-{"de": "Messstation", "fr": "Station de mesure", "it": "Stazione di misura", "en": "Measuring station"}
+```
+point_type_de | point_type_fr | point_type_it | point_type_en
+Station       | Station       | Stazione      | Station
 ```
 
-`SwissGeoProvider._translate_props()` collapses them to the language pygeoapi resolves, using pygeoapi's own `l10n.translate` so behaviour matches the rest of the framework: the requested language wins, then the first available language, then the struct itself. Supported languages: `en`, `de`, `fr`, `it` (falls back to `en`).
+`SwissGeoProvider._translate_props()` collapses each family into a single property (`point_type`, `parameter_description`, `parameter_group`) holding the language pygeoapi resolves, using pygeoapi's own `l10n.translate` so behaviour matches the rest of the framework: the requested language wins, then the first column present in the order `en`, `de`, `fr`, `it`. Supported languages: `en`, `de`, `fr`, `it` (falls back to `en`).
+
+The collapsing happens on the way out only. Queryables, `properties=` and `sortby=` still see the per-language column names (e.g. `sortby=point_type_de`).
 
 ### Why `app.py` is needed
 
@@ -92,11 +95,15 @@ providers:
     options:
       sslmode: ${DB_SSLMODE:-prefer}
     resource_id: swissgeo-features
-    table: sample_features
-    id_field: external_id
-    geom_field: geom
-    time_field: forecast_datetime
+    table: tbl_ogd-local-forecasting-tre200px
+    id_field: id
+    geom_field: geometry
+    time_field: datetime
     title_field: point_name
+    crs:
+      - http://www.opengis.net/def/crs/EPSG/0/2056
+      - http://www.opengis.net/def/crs/OGC/1.3/CRS84
+    storage_crs: http://www.opengis.net/def/crs/EPSG/0/2056
     languages:
       - en
       - de
@@ -150,7 +157,7 @@ build argument, `git describe --tags` in `make dockerbuild`); it is `local` othe
 
 The app runs on the host; its backing services run in docker compose (`docker-compose.yml`):
 
-- **PostGIS** on port 5432, bootstrapped by the `init-database` service with a small sample dataset
+- **PostGIS** (PostgreSQL 18) on port 5432, bootstrapped by the `init-database` service with a small sample dataset
 - **OTel collector** on 4317 (gRPC) / 4318 (HTTP), **Prometheus** on `:9090` and **Jaeger** on `:16686`
 
 ### Setup
@@ -188,8 +195,11 @@ Try it:
 ```bash
 curl 'http://localhost:8080/api/oaf/rc1/collections/sample-mch-param/items?lang=fr&f=json'
 curl 'http://localhost:8080/api/oaf/rc1/collections/sample-mch-param/items?bbox=5.9,45.9,6.9,46.6&f=json'
-curl 'http://localhost:8080/api/oaf/rc1/collections/sample-mch-param-lv95/items?crs=http://www.opengis.net/def/crs/EPSG/0/2056&f=json'
+curl 'http://localhost:8080/api/oaf/rc1/collections/sample-mch-param/items?crs=http://www.opengis.net/def/crs/EPSG/0/2056&f=json'
 ```
+
+Without `crs=` the output is CRS84, per OGC API - Features Part 2, and `bbox` is read as CRS84
+unless `bbox-crs` is passed too.
 
 ### Run the built image
 
@@ -207,8 +217,16 @@ The schema lives in `scripts/init_database.py`, which runs both locally (the `in
 compose service, via `make services-up` / `make reset-db`) and in kubernetes (as an init container, see
 swissgeo/infra-kubernetes `services/service-oa-features/base/patch-init-database.yaml`).
 
-It creates the owner role, the database, the PostGIS extension, the `sample_features` (WGS84) and
-`sample_features_lv95` (LV95) tables and their indexes. The role, database and extension steps are
+It creates the owner role, the database, the PostGIS extension and two tables mirroring the
+MeteoSwiss OGD local-forecasting definitions, both with geometry in LV95 (EPSG:2056):
+
+| Table | Content | Indexes |
+|---|---|---|
+| `tbl_ogd-local-forecasting-tre200px` | one row per forecast value, with its point and parameter metadata; backs `sample-mch-param` | `geometry` (GIST), `datetime`, `feature_id` |
+| `tbl_ogd-local-forecasting-point-meta` | one row per forecast point | `geometry` (GIST) |
+
+The table names contain hyphens, so they must be double-quoted in SQL
+(`SELECT * FROM "tbl_ogd-local-forecasting-tre200px"`). The role, database and extension steps are
 idempotent, but the tables are **dropped and recreated on every run**, so re-running it discards
 all existing rows — including on an ordinary pod restart. The sample features are local-dev only
 and are inserted only when `DB_SEED_SAMPLE_DATA` is truthy, which compose sets and the deployed
@@ -224,7 +242,9 @@ make reset-db       # re-apply the bootstrap (drops and reseeds the tables)
 make services-down  # stop the backing services, keeping the PostGIS data volume
 ```
 
-The same recipes are available through `just`.
+The compose PostGIS keeps its data in the `pgdata-18` volume. The volume of the earlier
+PostgreSQL 17 setup (`pgdata`) is no longer used and can be removed with
+`docker volume rm service-oa-features_pgdata`.
 
 ## Debugging
 

@@ -47,7 +47,7 @@ export UV_ENV_FILE := $(wildcard $(ENV_FILE))
 OTEL_ENDPOINT = $(shell sed -n 's/^OTEL_EXPORTER_OTLP_ENDPOINT=//p' $(ENV_FILE) 2>/dev/null)
 
 # Tables the collections in pygeoapi-config.yml are backed by
-DB_TABLES := sample_features sample_features_lv95
+DB_TABLES := tbl_ogd-local-forecasting-tre200px
 
 .env:
 	cp .env.default .env

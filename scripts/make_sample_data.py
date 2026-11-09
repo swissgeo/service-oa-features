@@ -228,13 +228,14 @@ def main() -> int:
     scans = {path: _scan_forecast(path) for path in forecast_files}
 
     # Points must appear in every value file as well as in the metadata, so that
-    # each selected point has a complete set of readings. `geom` is NOT NULL, which
-    # is what rules out the points the metadata does not describe.
+    # each selected point has a complete set of readings. The point_type_* labels
+    # are NOT NULL, which is what rules out the points the metadata does not
+    # describe.
     forecast_points = set.intersection(*(points for points, _ in scans.values()))
     undocumented = forecast_points - documented
     if undocumented:
         logger.info(
-            "ignoring %d forecast point(s) with no metadata, hence no coordinates",
+            "ignoring %d forecast point(s) with no metadata",
             len(undocumented),
         )
     selected = _select_points(forecast_points & documented)

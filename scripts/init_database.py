@@ -13,16 +13,16 @@ credentials mounted from `service-oa-features-secrets-db-admin`.
 The role, database and PostGIS steps are idempotent and may re-run on every pod
 start.
 
-Two feature tables are created, holding the same readings in different
-coordinate reference systems:
+Two tables are created, mirroring the MeteoSwiss OGD local-forecasting table
+definitions, both with geometry in CH1903+ / LV95 (EPSG:2056):
 
-* `sample_features`      -- geometry in WGS84 (EPSG:4326)
-* `sample_features_lv95` -- geometry in CH1903+ / LV95 (EPSG:2056)
+* `tbl_ogd-local-forecasting-tre200px`  -- one row per forecast value,
+  denormalised with its point and parameter metadata. Backs the
+  `sample-mch-param` collection in pygeoapi-config.yml.
+* `tbl_ogd-local-forecasting-point-meta` -- one row per forecast point.
 
-Each backs one collection in pygeoapi-config.yml, and each collection declares
-its table's SRID as its `storage_crs`, so neither read path reprojects. Both
-coordinate pairs are published by the source export, so the LV95 rows are
-MeteoSwiss's own easting/northing rather than a transform of the degrees.
+The table names contain hyphens, so they are always quoted (sql.Identifier)
+rather than interpolated as bare names.
 
 WARNING: the table step is *destructive*. Both tables are dropped and recreated
 on every run, so every row is lost each time this script executes -- including
@@ -45,7 +45,6 @@ README for its provenance and `make_sample_data.py` for how to rebuild it.
 """
 
 import csv
-import json
 import logging
 import os
 import re
@@ -64,82 +63,113 @@ logger = logging.getLogger("init_database")
 # CREATE EXTENSION postgis.
 ADMIN_DBNAME = "postgres"
 
-# The WGS84 table and the LV95 table hold the same readings; they differ only in
-# the SRID of `geom` and in which pair of source columns it is built from. Each
-# backs one collection in pygeoapi-config.yml, so neither read path reprojects.
-TABLE_NAME = "sample_features"
-TABLE_NAME_LV95 = "sample_features_lv95"
+# Both mirror the upstream MeteoSwiss table definitions. The hyphens make these
+# identifiers that must always be quoted -- go through sql.Identifier, never an
+# f-string.
+FORECAST_TABLE = "tbl_ogd-local-forecasting-tre200px"
+POINT_META_TABLE = "tbl_ogd-local-forecasting-point-meta"
 
-WGS84_SRID = 4326
 LV95_SRID = 2056
 
-# (table, srid, feature keys holding the x/y for that srid). The key pairs index
-# into the dicts iter_sample_features() yields.
+# Column for column the upstream DDLs. Worth knowing:
+#
+# * the per-language labels are flat *_de/_fr/_it/_en columns, exactly as the
+#   source ships them; the provider collapses them to the requested language;
+# * point_id alone is not unique; the source key is (point_id, point_type_id).
+#   station_abbr and postal_code are only populated for some point types, so both
+#   are nullable;
+# * `geometry` is typed to EPSG:2056 so PostGIS rejects a mismatched geometry at
+#   write time rather than storing coordinates that disagree with the column.
+#
+# The upstream DDLs also spell out a named NOT NULL constraint per column. Those
+# names are exactly the ones PostgreSQL 18 generates for a column-level NOT NULL
+# (<table>_<column>_not_null, truncated to 63 bytes), so they are not repeated.
+_FORECAST_COLUMNS = f"""
+  value                     FLOAT8        NOT NULL,
+  id                        SERIAL4       NOT NULL,
+  datetime                  TIMESTAMPTZ   NOT NULL,
+  feature_id                VARCHAR(64)   NOT NULL,
+  point_id                  INT4          NOT NULL,
+  point_type_id             INT4          NOT NULL,
+  point_type_de             VARCHAR(64)   NOT NULL,
+  point_type_fr             VARCHAR(64)   NOT NULL,
+  point_type_it             VARCHAR(64)   NOT NULL,
+  point_type_en             VARCHAR(64)   NOT NULL,
+  station_abbr              VARCHAR(64),
+  postal_code               INT4,
+  point_name                VARCHAR(256),
+  point_height_masl         FLOAT8,
+  geometry                  GEOMETRY(Geometry, {LV95_SRID}),
+  parameter_shortname       VARCHAR(64)   NOT NULL,
+  parameter_description_de  VARCHAR(256)  NOT NULL,
+  parameter_description_fr  VARCHAR(256)  NOT NULL,
+  parameter_description_it  VARCHAR(256)  NOT NULL,
+  parameter_description_en  VARCHAR(256)  NOT NULL,
+  parameter_group_de        VARCHAR(64)   NOT NULL,
+  parameter_group_fr        VARCHAR(64)   NOT NULL,
+  parameter_group_it        VARCHAR(64)   NOT NULL,
+  parameter_group_en        VARCHAR(64)   NOT NULL,
+  parameter_granularity     VARCHAR(64)   NOT NULL,
+  parameter_decimals        INT4          NOT NULL,
+  parameter_datatype        VARCHAR(64)   NOT NULL,
+  parameter_unit            VARCHAR(64),"""
+
+_POINT_META_COLUMNS = f"""
+  id                        SERIAL4       NOT NULL,
+  point_id                  INT4          NOT NULL,
+  point_type_id             INT4          NOT NULL,
+  point_name                VARCHAR(256),
+  station_abbr              VARCHAR(64),
+  postal_code               INT4,
+  point_type_de             VARCHAR(64)   NOT NULL,
+  point_type_fr             VARCHAR(64)   NOT NULL,
+  point_type_it             VARCHAR(64)   NOT NULL,
+  point_type_en             VARCHAR(64)   NOT NULL,
+  point_height_masl         FLOAT8,
+  geometry                  GEOMETRY(Geometry, {LV95_SRID}),"""
+
+# (table, column definitions, columns given a B-tree index). Every table also gets
+# a GIST index on `geometry`. On the forecast table, datetime is the collection's
+# time_field (OGC API datetime= filtering) and feature_id identifies a reading.
 TABLES = (
-    (TABLE_NAME, WGS84_SRID, ("lon", "lat")),
-    (TABLE_NAME_LV95, LV95_SRID, ("east", "north")),
+    (FORECAST_TABLE, _FORECAST_COLUMNS, ("datetime", "feature_id")),
+    (POINT_META_TABLE, _POINT_META_COLUMNS, ()),
 )
 
 
-def _drop_table_sql(table: str) -> str:
+def _drop_table_sql(table: str) -> sql.Composed:
     """Dropped and rebuilt on every run, so the table always matches the definition
-    below rather than whatever an earlier version of this script left behind.
+    above rather than whatever an earlier version of this script left behind.
 
     NOTE: this discards all existing rows -- see the data-loss warning in the
     module docstring.
     """
-    return f"DROP TABLE IF EXISTS {table}"
+    return sql.SQL("DROP TABLE IF EXISTS {table}").format(table=sql.Identifier(table))
 
 
-def _create_table_sql(table: str, srid: int) -> str:
-    """parameter_description, parameter_group and point_type_name are JSONB language
-    structs ({"de": …, "fr": …}); the provider collapses them to the requested
-    language via pygeoapi's l10n. Everything else is a plain scalar.
-
-    The columns mirror the MeteoSwiss OGD local-forecasting CSVs the sample data is
-    read from (see SAMPLE_DATA_DIR). Two consequences worth knowing:
-
-    * point_name is TEXT, not a language struct. The source ships a single name per
-      point ("Arosa", "Delémont"), and it is point_type that carries the localised
-      labels -- hence the separate point_type_name column.
-    * point_id alone is not unique; the source key is (point_id, point_type), which
-      is why external_id is built from both. station_abbr and postal_code are only
-      populated for some point types, so both stay nullable.
-
-    `geom` is typed to `srid` so PostGIS rejects a mismatched geometry at write
-    time rather than storing coordinates that silently disagree with the column's
-    declared CRS.
-    """
-    return f"""
-CREATE TABLE IF NOT EXISTS {table} (
-  external_id           TEXT PRIMARY KEY,
-  parameter_shortname   TEXT,
-  parameter_description JSONB,
-  parameter_group       JSONB,
-  parameter_unit        TEXT,
-  value                 FLOAT,
-  point_id              INT,
-  point_type            INT,
-  point_name            TEXT,
-  point_type_name       JSONB,
-  station_abbr          TEXT,
-  postal_code           TEXT,
-  point_height_masl     FLOAT,
-  forecast_datetime     TIMESTAMPTZ NOT NULL,
-  created               TIMESTAMPTZ NOT NULL DEFAULT now(),
-  geom                  GEOMETRY(Geometry, {srid}) NOT NULL
-)
-"""
+def _create_table_sql(table: str, columns: str) -> sql.Composed:
+    # `columns` is one of the constants above, never user input.
+    return sql.SQL(
+        "CREATE TABLE IF NOT EXISTS {table} (" + columns + "\n  CONSTRAINT {pk} PRIMARY KEY (id)\n)"
+    ).format(table=sql.Identifier(table), pk=sql.Identifier(f"pk_{table}"))
 
 
-def _create_index_sql(table: str) -> tuple[str, ...]:
-    return (
-        f"CREATE INDEX IF NOT EXISTS {table}_geom_idx ON {table} USING GIST (geom)",
-        f"CREATE INDEX IF NOT EXISTS {table}_created_idx ON {table} (created)",
-        # forecast_datetime is the collection's time_field, so this is the index that
-        # backs OGC API datetime= filtering.
-        f"CREATE INDEX IF NOT EXISTS {table}_forecast_datetime_idx ON {table} (forecast_datetime)",
+def _create_index_sql(table: str, btree_columns: tuple[str, ...]) -> list[sql.Composed]:
+    """Index names follow the upstream `idx_<table>_<column>` convention."""
+    statements = [
+        sql.SQL("CREATE INDEX IF NOT EXISTS {index} ON {table} USING GIST (geometry)").format(
+            index=sql.Identifier(f"idx_{table}_geometry"), table=sql.Identifier(table)
+        )
+    ]
+    statements.extend(
+        sql.SQL("CREATE INDEX IF NOT EXISTS {index} ON {table} ({column})").format(
+            index=sql.Identifier(f"idx_{table}_{column}"),
+            table=sql.Identifier(table),
+            column=sql.Identifier(column),
+        )
+        for column in btree_columns
     )
+    return statements
 
 
 # How many rows are handed to the server per INSERT round trip. The committed
@@ -170,9 +200,12 @@ FORECAST_FILENAME_RE = re.compile(r"^[^.]+\.[^.]+\.(?P<run>\d{12})\.(?P<paramete
 # export carries no offset; MeteoSwiss publishes UTC.
 SAMPLE_TIMESTAMP_FORMAT = "%Y%m%d%H%M"
 
-# The languages behind the *_de/_fr/_it/_en column families, and so the keys of
-# the JSONB language structs built from them.
+# The languages behind the *_de/_fr/_it/_en column families.
 LANGUAGES = ("de", "fr", "it", "en")
+
+# The per-language column families, in the order they are inserted.
+PARAMETER_LANG_PREFIXES = ("parameter_description", "parameter_group")
+POINT_LANG_PREFIXES = ("point_type",)
 
 
 def _iter_csv(path: Path) -> Iterator[dict[str, str]]:
@@ -189,27 +222,38 @@ def _parse_timestamp(stamp: str) -> datetime:
     return datetime.strptime(stamp, SAMPLE_TIMESTAMP_FORMAT).replace(tzinfo=UTC)
 
 
-def _lang_struct(row: dict[str, str], prefix: str) -> dict[str, str]:
-    """Collect a `<prefix>_de` / `_fr` / `_it` / `_en` column family into one JSONB struct."""
-    return {language: row[f"{prefix}_{language}"] for language in LANGUAGES}
+def _lang_columns(row: dict[str, str], prefixes: tuple[str, ...]) -> dict[str, str]:
+    """Copy the `<prefix>_de` / `_fr` / `_it` / `_en` column families through as-is."""
+    return {
+        f"{prefix}_{language}": row[f"{prefix}_{language}"]
+        for prefix in prefixes
+        for language in LANGUAGES
+    }
 
 
 def _optional(value: str) -> str | None:
     """Map the export's empty strings to NULL.
 
-    station_abbr and postal_code are each populated for some point types only, and
-    the export leaves the others blank rather than absent.
+    station_abbr, postal_code and parameter_unit are each populated for some rows
+    only, and the export leaves the others blank rather than absent.
     """
     return value.strip() or None
 
 
+def _optional_int(value: str) -> int | None:
+    stripped = value.strip()
+    return int(stripped) if stripped else None
+
+
 def _load_parameters() -> dict[str, dict]:
-    """Index the parameter metadata by shortname, with its language structs prebuilt."""
+    """Index the parameter metadata by shortname, in table-column shape."""
     return {
         row["parameter_shortname"]: {
-            "parameter_unit": row["parameter_unit"],
-            "parameter_description": _lang_struct(row, "parameter_description"),
-            "parameter_group": _lang_struct(row, "parameter_group"),
+            **_lang_columns(row, PARAMETER_LANG_PREFIXES),
+            "parameter_granularity": row["parameter_granularity"],
+            "parameter_decimals": int(row["parameter_decimals"]),
+            "parameter_datatype": row["parameter_datatype"],
+            "parameter_unit": _optional(row["parameter_unit"]),
         }
         for row in _iter_csv(PARAMETER_META_CSV)
     }
@@ -222,20 +266,16 @@ def _load_points() -> dict[tuple[int, int], dict]:
     export also ships a handful of exact duplicate rows; keying them into a dict
     collapses those.
 
-    Both coordinate pairs are read straight from the export, which publishes each
-    point in WGS84 *and* LV95. Nothing here reprojects: the LV95 table is seeded
-    from MeteoSwiss's own easting/northing rather than from a transform of the
-    degrees, so neither table's coordinates are derived from the other's.
+    Only the LV95 coordinates are kept, read straight from the export: the
+    tables store EPSG:2056, and nothing here reprojects.
     """
     return {
         (int(row["point_id"]), int(row["point_type_id"])): {
-            "point_name": row["point_name"],
-            "point_type_name": _lang_struct(row, "point_type"),
+            **_lang_columns(row, POINT_LANG_PREFIXES),
+            "point_name": _optional(row["point_name"]),
             "station_abbr": _optional(row["station_abbr"]),
-            "postal_code": _optional(row["postal_code"]),
+            "postal_code": _optional_int(row["postal_code"]),
             "point_height_masl": float(row["point_height_masl"]),
-            "lon": float(row["point_coordinates_wgs84_lon"]),
-            "lat": float(row["point_coordinates_wgs84_lat"]),
             "east": float(row["point_coordinates_lv95_east"]),
             "north": float(row["point_coordinates_lv95_north"]),
         }
@@ -260,19 +300,15 @@ def _forecast_files() -> list[tuple[Path, str, datetime]]:
 def iter_sample_features() -> Iterator[dict]:
     """Yield one seed feature per forecast value, joined to its point and parameter.
 
-    `created` is the forecast *run* time, so it is identical for every row of a
-    file: one run emits all of its steps at once. What varies within a point is
-    forecast_datetime and value -- which is what makes the sample data useful for
-    exercising OGC API `datetime=` filtering.
-
-    The language structs are shared references, not copies: every row of a file
-    carries the same parameter, and point_type_name comes from the point lookup.
+    What varies within a point is datetime and value -- which is what makes the
+    sample data useful for exercising OGC API `datetime=` filtering. The run time
+    in the file name is not stored: the table has no column for it.
     """
     parameters = _load_parameters()
     points = _load_points()
     undocumented = 0
 
-    for path, shortname, run in _forecast_files():
+    for path, shortname, _run in _forecast_files():
         parameter = parameters.get(shortname)
         if parameter is None:
             raise RuntimeError(
@@ -281,46 +317,49 @@ def iter_sample_features() -> Iterator[dict]:
 
         for row in _iter_csv(path):
             point_id = int(row["point_id"])
-            point_type = int(row["point_type_id"])
-            point = points.get((point_id, point_type))
+            point_type_id = int(row["point_type_id"])
+            point = points.get((point_id, point_type_id))
             if point is None:
-                # No metadata means no coordinates, and geom is NOT NULL. The full export
-                # has a few such points; the committed subset has none.
+                # No metadata means no point_type_* labels, which are NOT NULL (and no
+                # coordinates). The full export has a few such points; the committed
+                # subset has none.
                 undocumented += 1
                 continue
             yield {
                 "parameter_shortname": shortname,
                 "value": float(row[shortname]),
                 "point_id": point_id,
-                "point_type": point_type,
-                "forecast_datetime": _parse_timestamp(row["Date"]),
-                "created": run,
+                "point_type_id": point_type_id,
+                "datetime": _parse_timestamp(row["Date"]),
                 **parameter,
                 **point,
             }
 
     if undocumented:
         logger.warning(
-            "skipped %d forecast value(s) whose point has no metadata, hence no coordinates",
+            "skipped %d forecast value(s) whose point has no metadata",
             undocumented,
         )
 
 
-def _external_id(feature: dict) -> str:
-    """Compose the primary key from the fields that identify a single reading.
+def _feature_id(feature: dict) -> str:
+    """Compose feature_id from the fields that identify a single reading.
 
-    ``<point_id>_<point_type>_<parameter_shortname>_<forecast_datetime>``, where
-    the timestamp is normalised to UTC and rendered as ``YYYYMMDDHHMMSS`` so the
-    id carries none of the ISO-8601 separators::
+    ``<point_id>_<point_type_id>_<parameter_shortname>_<datetime>``, where the
+    timestamp is normalised to UTC and rendered as ``YYYYMMDDHHMMSS`` so the id
+    carries none of the ISO-8601 separators::
 
         1_1_tre200h0_20260819210000
 
     point_id is not unique on its own in the source data -- the same id recurs
-    across point types -- so point_type is part of the key rather than decoration.
+    across point types -- so point_type_id is part of the key rather than
+    decoration. The table's primary key is the serial `id`; feature_id is not
+    constrained unique.
     """
-    compact = feature["forecast_datetime"].astimezone(UTC).strftime("%Y%m%d%H%M%S")
+    compact = feature["datetime"].astimezone(UTC).strftime("%Y%m%d%H%M%S")
     return (
-        f"{feature['point_id']}_{feature['point_type']}_{feature['parameter_shortname']}_{compact}"
+        f"{feature['point_id']}_{feature['point_type_id']}"
+        f"_{feature['parameter_shortname']}_{compact}"
     )
 
 
@@ -421,9 +460,9 @@ def ensure_postgis(dbname: str, owner: str) -> None:
 
 
 def ensure_schema(dbname: str, owner: str, owner_password: str, seed: bool) -> None:
-    """Recreate the feature tables and indexes, and optionally seed sample data.
+    """Recreate the tables and indexes, and optionally seed sample data.
 
-    Each table in TABLES is dropped first, so any existing rows are discarded.
+    Each table is dropped first, so any existing rows are discarded.
 
     Connects as the owner role rather than the admin user so that the objects are
     owned by the role pygeoapi actually connects as -- otherwise every table would
@@ -432,78 +471,101 @@ def ensure_schema(dbname: str, owner: str, owner_password: str, seed: bool) -> N
     conn = _connect(dbname, user=owner, password=owner_password)
     try:
         with conn.cursor() as cur:
-            for table, srid, coord_keys in TABLES:
+            for table, columns, btree_columns in TABLES:
                 logger.warning("dropping table %s and all its rows", table)
                 cur.execute(_drop_table_sql(table))
-                logger.info("creating table %s (srid %d)", table, srid)
-                cur.execute(_create_table_sql(table, srid))
-                for statement in _create_index_sql(table):
+                logger.info("creating table %s (srid %d)", table, LV95_SRID)
+                cur.execute(_create_table_sql(table, columns))
+                for statement in _create_index_sql(table, btree_columns):
                     cur.execute(statement)
 
-                if seed:
-                    _seed_sample_data(cur, table, srid, coord_keys)
-
-            if not seed:
+            if seed:
+                _seed_point_meta(cur)
+                _seed_forecast(cur)
+            else:
                 logger.info("skipping sample data (set DB_SEED_SAMPLE_DATA=true to enable)")
     finally:
         conn.close()
 
 
-def _seed_sample_data(cur: cursor, table: str, srid: int, coord_keys: tuple[str, str]) -> None:
-    """Insert the local-dev sample features, leaving existing rows untouched.
+_POINT_COLUMNS = (
+    "point_id",
+    "point_type_id",
+    "point_name",
+    "station_abbr",
+    "postal_code",
+    *(f"{prefix}_{lang}" for prefix in POINT_LANG_PREFIXES for lang in LANGUAGES),
+    "point_height_masl",
+)
 
-    `coord_keys` names the pair of feature keys holding this table's coordinates --
-    ("lon", "lat") for WGS84, ("east", "north") for LV95 -- both of which come
-    straight from the export. The rows are otherwise identical between tables.
+# Insert column order of the forecast table; every name is also a key of the dicts
+# iter_sample_features() yields (plus feature_id, computed per row). `id` is
+# omitted so the serial assigns it, `geometry` because it is built from east/north.
+_FORECAST_SEED_COLUMNS = (
+    "value",
+    "datetime",
+    "feature_id",
+    *_POINT_COLUMNS,
+    "parameter_shortname",
+    *(f"{prefix}_{lang}" for prefix in PARAMETER_LANG_PREFIXES for lang in LANGUAGES),
+    "parameter_granularity",
+    "parameter_decimals",
+    "parameter_datatype",
+    "parameter_unit",
+)
+
+
+def _insert(cur: cursor, table: str, columns: tuple[str, ...], features: Iterator[dict]) -> int:
+    """Batch-insert `features` into `table`, building `geometry` from east/north.
+
+    The geometry is assembled from bound x/y parameters rather than a per-row SQL
+    fragment, so no part of the sample data is ever interpolated into the
+    statement text. LV95_SRID is an int constant, never user input.
     """
-    logger.info("seeding %s from %s", table, SAMPLE_DATA_DIR)
-
-    statement = sql.SQL(
-        "INSERT INTO {table} ("
-        "external_id, parameter_shortname, parameter_description, parameter_group, "
-        "parameter_unit, value, point_id, point_type, point_name, point_type_name, "
-        "station_abbr, postal_code, point_height_masl, forecast_datetime, created, geom"
-        ") VALUES %s "
-        "ON CONFLICT (external_id) DO NOTHING"
-    ).format(table=sql.Identifier(table))
-
-    # The geometry is assembled from bound x/y parameters rather than a per-row SQL
-    # fragment, so no part of the sample data is ever interpolated into the
-    # statement text. srid is an int constant from TABLES, never user input.
-    template = "(" + ", ".join(["%s"] * 15) + f", ST_SetSRID(ST_MakePoint(%s, %s), {srid}))"
-
-    x_key, y_key = coord_keys
+    statement = sql.SQL("INSERT INTO {table} ({columns}, geometry) VALUES %s").format(
+        table=sql.Identifier(table),
+        columns=sql.SQL(", ").join(sql.Identifier(column) for column in columns),
+    )
+    template = (
+        "(" + ", ".join(["%s"] * len(columns)) + f", ST_SetSRID(ST_MakePoint(%s, %s), {LV95_SRID}))"
+    )
 
     # Counted while streaming rather than up front: the row count is a property of
     # the CSVs, and nothing needs them all in memory to find it out.
-    seeded = 0
+    inserted = 0
 
     def rows() -> Iterator[tuple]:
-        nonlocal seeded
-        for feature in iter_sample_features():
-            seeded += 1
-            yield (
-                _external_id(feature),
-                feature["parameter_shortname"],
-                json.dumps(feature["parameter_description"]),
-                json.dumps(feature["parameter_group"]),
-                feature["parameter_unit"],
-                feature["value"],
-                feature["point_id"],
-                feature["point_type"],
-                feature["point_name"],
-                json.dumps(feature["point_type_name"]),
-                feature["station_abbr"],
-                feature["postal_code"],
-                feature["point_height_masl"],
-                feature["forecast_datetime"],
-                feature["created"],
-                feature[x_key],
-                feature[y_key],
-            )
+        nonlocal inserted
+        for feature in features:
+            inserted += 1
+            yield (*(feature[column] for column in columns), feature["east"], feature["north"])
 
     extras.execute_values(cur, statement, rows(), template=template, page_size=SEED_BATCH_SIZE)
-    logger.info("seeded %d sample feature(s) into %s", seeded, table)
+    return inserted
+
+
+def _seed_point_meta(cur: cursor) -> None:
+    """Insert one row per point of the local-dev sample data."""
+    logger.info("seeding %s from %s", POINT_META_TABLE, POINT_META_CSV)
+    points = (
+        {"point_id": point_id, "point_type_id": point_type_id, **point}
+        for (point_id, point_type_id), point in _load_points().items()
+    )
+    seeded = _insert(cur, POINT_META_TABLE, _POINT_COLUMNS, points)
+    logger.info("seeded %d point(s) into %s", seeded, POINT_META_TABLE)
+
+
+def _seed_forecast(cur: cursor) -> None:
+    """Insert one row per forecast value of the local-dev sample data."""
+    logger.info("seeding %s from %s", FORECAST_TABLE, SAMPLE_DATA_DIR)
+
+    def features() -> Iterator[dict]:
+        for feature in iter_sample_features():
+            feature["feature_id"] = _feature_id(feature)
+            yield feature
+
+    seeded = _insert(cur, FORECAST_TABLE, _FORECAST_SEED_COLUMNS, features())
+    logger.info("seeded %d sample feature(s) into %s", seeded, FORECAST_TABLE)
 
 
 def main() -> int:

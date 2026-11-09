@@ -1,10 +1,11 @@
 """SwissGeo PostGIS feature provider for OGC API Features.
 
 Extends PostgreSQLProvider with language-aware field selection:
-``parameter_description``, ``parameter_group`` and ``point_type_name`` arrive as
-per-language JSONB objects (``{"de": …, "fr": …}``) and are collapsed to the
-language pygeoapi resolves (passed in via the ``language`` kwarg) using
-``pygeoapi.l10n.translate``, before handing results back to pygeoapi.
+``parameter_description``, ``parameter_group`` and ``point_type`` are stored as
+one column per language (``point_type_de``, ``point_type_fr``, …) and are
+collapsed into a single property holding the language pygeoapi resolves (passed
+in via the ``language`` kwarg), using ``pygeoapi.l10n.translate``, before
+handing results back to pygeoapi.
 
 Also patches same-host links to carry ``lang`` and ``f`` query params.
 
@@ -18,10 +19,10 @@ Usage in pygeoapi-config.yml:
           dbname: swissgeo
           user: swissgeo
           password: swissgeo
-        table: sample_features
-        id_field: external_id
-        geom_field: geom
-        time_field: forecast_datetime
+        table: tbl_ogd-local-forecasting-tre200px
+        id_field: id
+        geom_field: geometry
+        time_field: datetime
         title_field: point_name
         languages:
           - en
@@ -46,13 +47,23 @@ _tracer = trace.get_tracer(__name__)
 
 _SUPPORTED_LANGS = {"de", "en", "fr", "it"}
 
-# Columns stored as per-language JSONB objects, collapsed by _translate_props().
-# Must stay in sync with the table definition in scripts/init_database.py.
+# Order of the per-language columns handed to l10n.translate, which falls back to
+# the first one present when the requested language has no column -- so en first.
+_LANG_COLUMN_ORDER = ("en", "de", "fr", "it")
+
+# Properties stored as one `<field>_<lang>` column per language, collapsed into a
+# single `<field>` property by _translate_props(). Must stay in sync with the
+# table definition in scripts/init_database.py.
 #
 # point_name is deliberately absent: the MeteoSwiss source ships one name per
-# point rather than a per-language struct, so it is plain TEXT and passes
-# through untranslated. point_type_name carries the localised label instead.
-_LANG_STRUCT_FIELDS = ("parameter_description", "parameter_group", "point_type_name")
+# point, so it passes through untranslated. point_type carries the localised
+# label instead.
+_LANG_FIELDS = ("parameter_description", "parameter_group", "point_type")
+
+# `<field>_<lang>` column name -> (field, lang).
+_LANG_COLUMNS = {
+    f"{field}_{lang}": (field, lang) for field in _LANG_FIELDS for lang in _LANG_COLUMN_ORDER
+}
 
 _local = threading.local()
 
@@ -85,7 +96,7 @@ def _get_base_url() -> str:
 class SwissGeoProvider(PostgreSQLProvider):
     """OGC API Features provider backed by PostGIS.
 
-    Adds language-aware JSONB language-struct collapsing and same-host
+    Adds language-aware collapsing of the per-language columns and same-host
     link patching on top of the standard PostgreSQLProvider.
     """
 
@@ -178,19 +189,39 @@ class SwissGeoProvider(PostgreSQLProvider):
 
 
 def _translate_props(props: dict, language) -> None:  # noqa: ANN001
-    """Collapse the JSONB language structs in place.
+    """Collapse the per-language column families in place.
+
+    ``point_type_de`` / ``_fr`` / ``_it`` / ``_en`` become one ``point_type``
+    property, placed where the first of its columns was. Same for
+    ``parameter_description`` and ``parameter_group``.
 
     Uses pygeoapi's own :func:`pygeoapi.l10n.translate` so behaviour matches
     the rest of the framework: the value for *language* is returned, falling
-    back to the first available language, then to the struct itself. Only the
-    known language-struct fields are translated to avoid l10n warnings on
-    non-locale sibling keys (``type``, ``rel``, …).
+    back to the first column present (en, de, fr, it in that order). Without a
+    *language* the columns are left as they are.
     """
     if not language:
         return
-    for field in _LANG_STRUCT_FIELDS:
-        if isinstance(props.get(field), dict):
-            props[field] = l10n.translate(props[field], language)
+
+    # Untyped on purpose: l10n.translate() is annotated `value: str` although it is
+    # documented (and used here) to take a language struct.
+    families: dict = {}
+    for column, (field, lang) in _LANG_COLUMNS.items():
+        if column in props:
+            families.setdefault(field, {})[lang] = props[column]
+    if not families:
+        return
+
+    collapsed: dict = {}
+    for key, value in props.items():
+        if key not in _LANG_COLUMNS:
+            collapsed[key] = value
+            continue
+        field = _LANG_COLUMNS[key][0]
+        if field not in collapsed:
+            collapsed[field] = l10n.translate(families[field], language)
+    props.clear()
+    props.update(collapsed)
 
 
 def _ensure_self_link(links: list, collection_id: str, item_id: str) -> None:

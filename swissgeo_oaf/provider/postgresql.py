@@ -53,7 +53,7 @@ _LANG_COLUMN_ORDER = ("en", "de", "fr", "it")
 
 # Properties stored as one `<field>_<lang>` column per language, collapsed into a
 # single `<field>` property by _translate_props(). Must stay in sync with the
-# table definition in scripts/init_database.py.
+# MeteoSwiss table definition (see swissgeo_oaf/sample_data.py).
 #
 # point_name is deliberately absent: the MeteoSwiss source ships one name per
 # point, so it passes through untranslated. point_type carries the localised

@@ -9,6 +9,12 @@ root:
   propagate: True
 
 loggers:
+  swissgeo_oaf.discovery:
+    # Which tables are served as which collections, logged once at startup.
+    level: INFO
+  swissgeo_oaf.sample_data:
+    # The sample table being recreated, logged once at startup.
+    level: INFO
   pygeoapi.provider:
     level: INFO
     handlers:

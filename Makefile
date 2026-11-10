@@ -46,8 +46,6 @@ export UV_ENV_FILE := $(wildcard $(ENV_FILE))
 # Read back the value the recipes need at the shell level (i.e. outside `uv run`).
 OTEL_ENDPOINT = $(shell sed -n 's/^OTEL_EXPORTER_OTLP_ENDPOINT=//p' $(ENV_FILE) 2>/dev/null)
 
-# Tables the collections in pygeoapi-config.yml are backed by
-DB_TABLES := tbl_ogd-local-forecasting-tre200px
 
 .env:
 	cp .env.default .env
@@ -94,9 +92,9 @@ ci-check-format: format ## Check the format (CI)
 	fi
 
 .PHONY: services-up
-services-up: ## Start PostGIS, collector, Jaeger, Prometheus and (re)apply the schema and sample data
+services-up: ## Start PostGIS, collector, Jaeger, Prometheus and (re)apply the database bootstrap
 	docker compose up --detach --wait postgres otel-collector jaeger prometheus
-	docker compose run --rm --build init-database
+	$(MAKE) reset-db
 
 
 .PHONY: services-down
@@ -110,29 +108,34 @@ dbshell: ## Open a psql shell on the local PostGIS container
 
 
 .PHONY: reset-db
-reset-db: ## Re-apply the PostGIS bootstrap schema/seed data to the running database
+reset-db: ## Re-apply the PostGIS bootstrap (role, database, PostGIS) to the running database
 	docker compose run --rm --build init-database
 
 
+.PHONY: reseed
+reseed: .env ## Recreate the sample table (the app also does this on every start)
+	$(PYTHON) -m swissgeo_oaf.sample_data
+
+
 .PHONY: check-db
-check-db: .env ## Check that PostGIS is reachable with the expected tables
-	@$(PYTHON) scripts/check_database.py $(DB_TABLES)
+check-db: .env ## Check that PostGIS is reachable
+	@$(PYTHON) scripts/check_database.py
 
 
 .PHONY: openapi
-openapi: .env ## Generate the OpenAPI document from the pygeoapi config
-	# $$PYGEOAPI_* come from $(ENV_FILE), which uv loads into the child environment,
-	# so expand them inside the `uv run` shell rather than in make's.
-	$(UV_RUN) sh -c 'pygeoapi openapi generate "$$PYGEOAPI_CONFIG" --output-file "$$PYGEOAPI_OPENAPI"'
+openapi: .env ## Discover the PostGIS tables and generate the pygeoapi config and OpenAPI document
+	# The app does this itself on startup (swissgeo_oaf.discovery); this target is for
+	# inspecting the result without serving. Needs the database, like `make serve`.
+	$(PYTHON) -m swissgeo_oaf.discovery
 
 
 .PHONY: serve
-serve: check-db openapi ## Serve the application locally
+serve: check-db ## Serve the application locally
 	$(UVICORN) $(SERVE_ARGS) --reload
 
 
 .PHONY: serve-debug
-serve-debug: check-db openapi ## Serve the application locally for debugging
+serve-debug: check-db ## Serve the application locally for debugging
 	$(PYTHON) -m debugpy --listen localhost:5678 --wait-for-client \
 		-m uvicorn $(SERVE_ARGS)
 

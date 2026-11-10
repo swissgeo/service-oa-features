@@ -8,6 +8,10 @@ silently drops anything else, so the provider locale always fell back to the
 default (``en``) regardless of ``?lang=``. We rewrite ``_raw_locale`` to a
 one-element list so the native locale-negotiation path resolves correctly.
 
+Before pygeoapi is imported, recreates the sample table
+(``swissgeo_oaf.sample_data``) and discovers the PostGIS tables to serve as
+collections (``swissgeo_oaf.discovery``).
+
 Also injects the ``lang``/``f`` query params into the executor thread via a
 thread-local, used for same-host link patching in the provider.
 
@@ -15,10 +19,27 @@ Usage:
     uvicorn swissgeo_oaf.app:APP --host 0.0.0.0 --port 8080
 """
 
+# ruff: noqa: E402 -- the startup work below has to run between the imports.
 import asyncio
 from collections.abc import AsyncGenerator, Callable
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
+
+from swissgeo_oaf.discovery import prepare_config
+from swissgeo_oaf.sample_data import seed_sample_data
+from swissgeo_oaf.settings import get_settings
+
+settings = get_settings()
+
+# The sample table behind the static sample-mch-param collection; recreated on
+# every start, so it exists before pygeoapi first queries it.
+if settings.sample_data_enabled:
+    seed_sample_data(settings)
+
+# pygeoapi reads its config file once, when pygeoapi.starlette_app is imported, so
+# the PostGIS tables have to be discovered -- and PYGEOAPI_CONFIG pointed at the
+# generated config -- before that import.
+prepare_config()
 
 import pygeoapi.starlette_app as _starlette_mod
 from pygeoapi.api import API, APIRequest
@@ -33,10 +54,7 @@ from swissgeo_oaf.cache_control import CacheControlMiddleware
 from swissgeo_oaf.disable_html import DisableHtmlMiddleware
 from swissgeo_oaf.otel import initialize_instrumentation, shutdown_otel
 from swissgeo_oaf.provider.postgresql import set_request_params
-from swissgeo_oaf.settings import get_settings
 from swissgeo_oaf.syntheticz import syntheticz_endpoint
-
-settings = get_settings()
 
 _original_call_api_threadsafe = _starlette_mod.call_api_threadsafe
 

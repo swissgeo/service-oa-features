@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
-pygeoapi openapi generate pygeoapi-config.yml --output-file "${PYGEOAPI_OPENAPI:-/pygeoapi/pygeoapi-openapi.yml}"
+# No `pygeoapi openapi generate` here: the app discovers the PostGIS tables on
+# startup and writes the config and OpenAPI document itself (swissgeo_oaf.discovery),
+# next to $PYGEOAPI_OPENAPI -- so that directory has to be writable.
 
 if [ "${PYDEBUG}" = "true" ]; then
     echo PYDEBUG mode enabled!

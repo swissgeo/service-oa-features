@@ -28,13 +28,15 @@ def _provider_def(table: str) -> dict:
 
 
 _RESOURCES = {
+    # Static, like in pygeoapi-config.yml ...
     "sample-mch-param": {
         "type": "collection",
-        "providers": [_provider_def("tbl_ogd-local-forecasting-tre200px")],
+        "providers": [_provider_def("sample_mch_param")],
     },
-    "point-meta": {
+    # ... and discovered at startup.
+    "ogd-local-forecasting-tre200px": {
         "type": "collection",
-        "providers": [_provider_def("tbl_ogd-local-forecasting-point-meta")],
+        "providers": [_provider_def("tbl_ogd-local-forecasting-tre200px")],
     },
     "other": {
         "type": "collection",
@@ -83,8 +85,8 @@ def test_syntheticz_up(client: TestClient, inspector: MagicMock) -> None:
         "external_systems": {"postgresql": {"status": "UP"}},
     }
     assert [call.args for call in inspector.has_table.call_args_list] == [
+        ("sample_mch_param",),
         ("tbl_ogd-local-forecasting-tre200px",),
-        ("tbl_ogd-local-forecasting-point-meta",),
     ]
     assert {call.kwargs["schema"] for call in inspector.has_table.call_args_list} == {"public"}
 

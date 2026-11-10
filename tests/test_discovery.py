@@ -335,7 +335,7 @@ def test_prepare_config(
 
     target = prepare_config()
 
-    assert target == openapi.parent / discovery.GENERATED_CONFIG_NAME
+    assert target == discovery.generated_config_path(openapi)
     assert discovery.os.environ["PYGEOAPI_CONFIG"] == str(target)
     generated = yaml.safe_load(target.read_text())
     assert list(generated["resources"]) == ["ogd-local-forecasting-tre200px"]
@@ -379,3 +379,25 @@ def test_prepare_config_writes_shared_objects_in_full(
     generated = yaml.safe_load(text)
     assert list(generated["resources"]) == ["sample", "tbl_ogd-local-forecasting-tre200px"]
     assert generated["resources"]["sample"]["extents"]["spatial"]["bbox"][0] == 5.9
+
+
+# ---------------------------------------------------------------------------
+# matched_tables
+# ---------------------------------------------------------------------------
+
+
+class TestMatchedTables:
+    def test_one_tuple_per_rule(self, database: MagicMock) -> None:
+        database.tables.append(f"{_PREFIX}rre150h0")
+        config = _config()
+        config["swissgeo"]["discovery"].append({**_RULE, "tables": "spatial_*", "exclude": []})
+
+        assert discovery.matched_tables(config, config) == (
+            (f"{_PREFIX}rre150h0", f"{_PREFIX}tre200px"),
+            ("spatial_ref_sys_like",),
+        )
+        assert database.close.call_count == 2
+
+    def test_no_discovery_section(self, database: MagicMock) -> None:
+        assert discovery.matched_tables({}, {}) == ()
+        database.close.assert_not_called()

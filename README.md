@@ -93,7 +93,7 @@ The collections come from two places:
 | Collection | Table | Source |
 |---|---|---|
 | `sample-mch-param` | `sample_mch_param` | listed statically under `resources:` in `pygeoapi-config.yml`; sample data the app seeds on startup, see [Database](#database) |
-| `ogd-local-forecasting-<param>` | `tbl_ogd-local-forecasting-<param>` | discovered at startup |
+| `ogd-local-forecasting-<param>` | `tbl_ogd-local-forecasting-<param>` | discovered at startup, then every `DISCOVERY_REFRESH_SECONDS` |
 
 The forecast pipeline creates and fills the `tbl_ogd-local-forecasting-*` tables, so they are
 not listed in the config. At startup, before pygeoapi reads its config, `swissgeo_oaf.discovery`
@@ -115,8 +115,18 @@ references and never reach the disk. `make openapi` runs the same discovery with
 
 Worth knowing:
 
-- **Tables are discovered at startup only.** A table created later is served after the next
-  restart (`kubectl rollout restart`, or saving a file under `make serve --reload`).
+- **The discovery is repeated while the app runs** (`swissgeo_oaf.refresh`), every
+  `DISCOVERY_REFRESH_SECONDS` (default 300; `0` disables it). Each tick only lists the matching
+  tables; when that list changed, it regenerates the config and OpenAPI document and swaps the
+  new collections into the running pygeoapi, without a restart. A dropped table's collection
+  disappears the same way. A failed refresh is logged and keeps the current collections.
+- **Only the table list is watched.** A changed `parameter_description_<lang>` title is picked
+  up with the next table change or restart, as are changes to the rest of `pygeoapi-config.yml`.
+- **Replicas refresh independently**, so for up to one interval a new collection can be served
+  by some pods and not yet by others.
+- **The refresh relies on pygeoapi internals:** it replaces `resources`, `tpl_config` and
+  `openapi` on the module-level `pygeoapi.starlette_app.api_`. Check `tests/test_refresh.py`
+  and the swap in `swissgeo_oaf/refresh.py` when upgrading pygeoapi.
 - **Only tables with a PostGIS geometry column that the service role can `SELECT` are
   found.** PostGIS's `geometry_columns` view hides the others. A table created by another role
   needs a `GRANT SELECT` to `DB_USER`.
@@ -170,6 +180,7 @@ Key environment variables:
 | `SAMPLE_DATA_ENABLED` | `true` | Recreate and seed the `sample_mch_param` table on startup |
 | `PYGEOAPI_CONFIG` | `/pygeoapi/pygeoapi-config.yml` | pygeoapi config file path |
 | `THREADPOOL_MAX_WORKERS` | `16` | Threads running the API calls |
+| `DISCOVERY_REFRESH_SECONDS` | `300` | Interval of the table discovery in the running app; `0` discovers at startup only |
 | `CACHE_CONTROL_HEADER` | `public, max-age=300` | `Cache-Control` header set on GET/HEAD responses, except 5xx and responses that already have one; empty disables it |
 | `HTML_ENABLED` | `false` | Serve pygeoapi's HTML output; when `false`, `f=html` returns 400 and `text/html` is ignored in `Accept` (browsers get JSON) |
 | `OTEL_PYTHON_EXCLUDED_URLS` | | Comma-separated URL regexes not traced by the ASGI middleware (e.g. `/syntheticz`) |
@@ -330,6 +341,7 @@ swissgeo_oaf/               # Python package, installed in the virtualenv by `uv
   disable_html.py           # middleware disabling pygeoapi's HTML output
   syntheticz.py             # /syntheticz health check of PostGIS
   discovery.py              # startup discovery of the tables served as collections
+  refresh.py                # periodic re-discovery, swapped into the running app
   sample_data.py            # startup (re)seeding of the sample_mch_param table
   sample-data/              # Committed CSV subset it seeds from
   version.py                # `local`, overwritten with the version in the image

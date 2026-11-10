@@ -82,11 +82,17 @@ async def check(resources: dict) -> Syntheticz:
     return syntheticz
 
 
-def syntheticz_endpoint(resources: dict) -> Callable[[Request], Awaitable[JSONResponse]]:
-    """Return the synthetic check endpoint for the given pygeoapi resources."""
+def syntheticz_endpoint(
+    get_resources: Callable[[], dict],
+) -> Callable[[Request], Awaitable[JSONResponse]]:
+    """Return the synthetic check endpoint for the pygeoapi resources.
+
+    *get_resources* is called on every check, as the discovery refresh
+    (``swissgeo_oaf.refresh``) replaces the resources in the running app.
+    """
 
     async def get_syntheticz(_request: Request) -> JSONResponse:
-        health = await check(resources)
+        health = await check(get_resources())
         return JSONResponse(
             health.model_dump(mode="json"),
             status_code=200 if health.status == SyntheticzStatus.UP else 500,

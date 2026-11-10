@@ -49,6 +49,10 @@ class Settings(BaseSettings):
     # collection when the app starts.
     sample_data_enabled: bool = True
 
+    # Seconds between two runs of the table discovery in the running app
+    # (swissgeo_oaf.refresh). 0 disables it: tables are then only discovered at startup.
+    discovery_refresh_seconds: float = 300
+
     # Size of the thread pool running the pygeoapi API calls.
     threadpool_max_workers: int = 16
 

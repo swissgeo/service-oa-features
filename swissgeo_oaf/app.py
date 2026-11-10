@@ -10,7 +10,8 @@ one-element list so the native locale-negotiation path resolves correctly.
 
 Before pygeoapi is imported, recreates the sample table
 (``swissgeo_oaf.sample_data``) and discovers the PostGIS tables to serve as
-collections (``swissgeo_oaf.discovery``).
+collections (``swissgeo_oaf.discovery``). While the app runs, the discovery is
+repeated periodically and new collections are swapped in (``swissgeo_oaf.refresh``).
 
 Also injects the ``lang``/``f`` query params into the executor thread via a
 thread-local, used for same-host link patching in the provider.
@@ -23,9 +24,10 @@ Usage:
 import asyncio
 from collections.abc import AsyncGenerator, Callable
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 
 from swissgeo_oaf.discovery import prepare_config
+from swissgeo_oaf.refresh import CollectionRefresher
 from swissgeo_oaf.sample_data import seed_sample_data
 from swissgeo_oaf.settings import get_settings
 
@@ -38,7 +40,12 @@ if settings.sample_data_enabled:
 
 # pygeoapi reads its config file once, when pygeoapi.starlette_app is imported, so
 # the PostGIS tables have to be discovered -- and PYGEOAPI_CONFIG pointed at the
-# generated config -- before that import.
+# generated config -- before that import. The refresher is created first, as it
+# needs PYGEOAPI_CONFIG to still name the hand-written config, and records the
+# tables before the discovery, so that none created in between is missed.
+refresher = CollectionRefresher.from_environment(settings.discovery_refresh_seconds)
+if refresher.enabled:
+    refresher.snapshot()
 prepare_config()
 
 import pygeoapi.starlette_app as _starlette_mod
@@ -82,6 +89,8 @@ def _call_api_threadsafe_with_lang(  # pragma: no cover
 
 _starlette_mod.call_api_threadsafe = _call_api_threadsafe_with_lang  # ty: ignore[invalid-assignment]
 
+refresher.attach(_starlette_mod.api_)
+
 
 async def _redirect_to_api(_request: Request) -> RedirectResponse:  # pragma: no cover
     return RedirectResponse(url=settings.api_prefix)
@@ -97,7 +106,12 @@ async def _lifespan(_app: Starlette) -> AsyncGenerator[None]:
             max_workers=settings.threadpool_max_workers, thread_name_prefix="pygeoapi"
         ),
     )
+    refresh_task = asyncio.create_task(refresher.run()) if refresher.enabled else None
     yield
+    if refresh_task is not None:
+        refresh_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await refresh_task
     shutdown_otel()
 
 
@@ -107,7 +121,7 @@ APP = Starlette(
         # Must come before the pygeoapi mount, which would otherwise match the path.
         Route(
             f"{settings.api_prefix}/syntheticz",
-            syntheticz_endpoint(_starlette_mod.CONFIG["resources"]),
+            syntheticz_endpoint(lambda: _starlette_mod.api_.config["resources"]),
         ),
         Mount(settings.api_prefix, app=_PYGEOAPI_APP),
     ],

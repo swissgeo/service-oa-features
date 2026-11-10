@@ -66,7 +66,9 @@ def inspector(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
 
 @pytest.fixture
 def client(inspector: MagicMock) -> Iterator[TestClient]:  # noqa: ARG001
-    app = Starlette(routes=[Route("/syntheticz", syntheticz.syntheticz_endpoint(_RESOURCES))])
+    app = Starlette(
+        routes=[Route("/syntheticz", syntheticz.syntheticz_endpoint(lambda: _RESOURCES))]
+    )
     with TestClient(app) as test_client:
         yield test_client
 

@@ -2,10 +2,14 @@
 
 Used by `make check-db` before serving locally. Reads the same DB_* variables as
 pygeoapi-config.yml and exits non-zero with a hint when the database is not
-reachable or a table is missing.
+reachable, lacks the PostGIS extension (scripts/init_database.py has not run), or
+lacks one of the given tables.
+
+The app creates its sample table itself on startup, so `make check-db` passes no
+tables.
 
 Usage:
-    python scripts/check_database.py TABLE [TABLE ...]
+    python scripts/check_database.py [TABLE ...]
 """
 
 import os
@@ -35,14 +39,23 @@ def main(tables: list[str]) -> int:
 
     try:
         with conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM pg_extension WHERE extname = 'postgis'")
+            has_postgis = cur.fetchone() is not None
             missing = []
             for table in tables:
-                cur.execute("SELECT to_regclass(%s)", (table,))
+                # quote_ident so names that need quoting (e.g. ones with hyphens,
+                # like tbl_ogd-local-forecasting-tre200px) resolve rather than error.
+                cur.execute("SELECT to_regclass(quote_ident(%s))", (table,))
                 row = cur.fetchone()
                 if row is None or row[0] is None:
                     missing.append(table)
     finally:
         conn.close()
+
+    if not has_postgis:
+        print(f"ERROR: PostGIS at {where} is up but not bootstrapped", file=sys.stderr)
+        print("       Run `make reset-db` first.", file=sys.stderr)
+        return 1
 
     if missing:
         print(

@@ -33,8 +33,6 @@ WORKDIR /pygeoapi
 ENV PYGEOAPI_CONFIG=/pygeoapi/pygeoapi-config.yml
 ENV PYGEOAPI_OPENAPI=/pygeoapi/pygeoapi-openapi.yml
 ENV PATH="/pygeoapi/.venv/bin:$PATH"
-# Fewer glibc malloc arenas keep the memory freed by the worker threads from
-# fragmenting across arenas and inflating the RSS.
 ENV MALLOC_ARENA_MAX=2
 # uvicorn answers 503 once this many connections or requests are open, instead
 # of accepting more work than fits in memory.

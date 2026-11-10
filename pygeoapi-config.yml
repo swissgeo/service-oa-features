@@ -64,104 +64,93 @@ metadata:
     email: info@geo.admin.ch
     role: pointOfContact
 
+# Not a pygeoapi key: read by swissgeo_oaf.discovery when the app starts. Every
+# PostGIS table matching `tables` (minus `exclude`) is served as a collection
+# built from `resource`, with `table` set to the discovered table. In
+# `collection_id`, `title` and `description`, {match} is what the `*` matched
+# (e.g. tre200px) and {table} the full table name. `title_columns` names a
+# <prefix>_<lang> column family the title is read from (first row), falling back
+# to the template title when the table is empty.
+#
+# The tables are created and filled by the forecast pipeline. They are only
+# discovered at startup; a new table appears after a restart.
+#
+# Defined before `resources` so that the sample collection there can reuse the
+# template through the &forecast-resource / &forecast-provider anchors.
+swissgeo:
+  discovery:
+    - tables: tbl_ogd-local-forecasting-*
+      exclude:
+        - tbl_ogd-local-forecasting-point-meta
+      collection_id: ogd-local-forecasting-{match}
+      title_columns: parameter_description
+      # The tables store geometry in CH1903+ / LV95 (EPSG:2056). storage_crs names
+      # 2056 to match the column, so serving LV95 needs no transform; CRS84 is
+      # still offered, and pygeoapi reprojects 2056→CRS84 for those requests via
+      # get_crs_transform_spec().
+      #
+      # Clients pick the output CRS with ?crs=…. Note the OGC default still
+      # applies: without it they get CRS84, not LV95, per OGC API - Features
+      # Part 2. Likewise bbox is interpreted as CRS84 unless bbox-crs is passed.
+      resource: &forecast-resource
+        type: collection
+        title: Local forecast {match}
+        description: MeteoSwiss local forecast of parameter {match}, from table {table}
+        keywords: [switzerland, geodata, features, meteoswiss, forecast]
+        links:
+          - type: text/html
+            rel: canonical
+            title: swisstopo
+            href: https://www.swisstopo.admin.ch
+            hreflang: en
+        extents:
+          spatial:
+            bbox: [5.9, 45.8, 10.5, 47.9]
+            crs: http://www.opengis.net/def/crs/OGC/1.3/CRS84
+          temporal:
+            begin: 2026-01-01T00:00:00Z
+            end: null
+            trs: http://www.opengis.net/def/uom/ISO-8601/0/Gregorian
+        providers:
+          - &forecast-provider
+            type: feature
+            name: swissgeo_oaf.provider.postgresql.SwissGeoProvider
+            data:
+              host: ${DB_HOST:-localhost}
+              port: ${DB_PORT:-5432}
+              dbname: ${DB_NAME:-service-oa-features}
+              user: ${DB_USER:-service-oa-features}
+              password: ${DB_PW:-swissgeo}
+              search_path: [public]
+            options:
+              sslmode: ${DB_SSLMODE:-prefer}
+            # resource_id and table are set per discovered table.
+            id_field: id
+            geom_field: geometry
+            time_field: datetime
+            title_field: point_name
+            crs:
+              - http://www.opengis.net/def/crs/EPSG/0/2056
+              - http://www.opengis.net/def/crs/OGC/1.3/CRS84
+            storage_crs: http://www.opengis.net/def/crs/EPSG/0/2056
+            languages:
+              - en
+              - de
+              - fr
+              - it
+
+# Collections served as configured, in addition to the discovered ones.
 resources:
+  # Sample data: the sample_mch_param table, recreated and seeded by the app
+  # itself on every start (swissgeo_oaf/sample_data.py, SAMPLE_DATA_ENABLED). Same
+  # columns as the pipeline's tables, but named so that the discovery does not
+  # pick it up.
   sample-mch-param:
-    type: collection
+    <<: *forecast-resource
     title: Sample MCH Parameter
-    description: Sample MCH Parameter
-    keywords: [switzerland, geodata, features, swisstopo]
-    links:
-      - type: text/html
-        rel: canonical
-        title: swisstopo
-        href: https://www.swisstopo.admin.ch
-        hreflang: en
-    extents:
-      spatial:
-        bbox: [5.9, 45.8, 10.5, 47.9]
-        crs: http://www.opengis.net/def/crs/OGC/1.3/CRS84
-      temporal:
-        begin: 2026-01-01T00:00:00Z
-        end: null
-        trs: http://www.opengis.net/def/uom/ISO-8601/0/Gregorian
+    description: Sample MCH Parameter, a subset of the MeteoSwiss local forecast
+    keywords: [switzerland, geodata, features, swisstopo, sample]
     providers:
-      - type: feature
-        name: swissgeo_oaf.provider.postgresql.SwissGeoProvider
-        data:
-          host: ${DB_HOST:-localhost}
-          port: ${DB_PORT:-5432}
-          dbname: ${DB_NAME:-service-oa-features}
-          user: ${DB_USER:-service-oa-features}
-          password: ${DB_PW:-swissgeo}
-          search_path: [public]
-        options:
-          sslmode: ${DB_SSLMODE:-prefer}
-        resource_id: swissgeo-features
-        table: sample_features
-        id_field: external_id
-        geom_field: geom
-        time_field: forecast_datetime
-        title_field: point_name
-        languages:
-          - en
-          - de
-          - fr
-          - it
-  # Same readings as sample-mch-param, but backed by the LV95 table rather than
-  # the WGS84 one: init_database.py seeds sample_features_lv95 with geom typed
-  # GEOMETRY(Geometry, 2056), from the easting/northing the MeteoSwiss export
-  # publishes alongside the degrees.
-  #
-  # storage_crs therefore names 2056, matching the column. Serving LV95 needs no
-  # transform at all; CRS84 is still offered, and pygeoapi reprojects 2056→CRS84
-  # for those requests via get_crs_transform_spec().
-  #
-  # Clients pick the output CRS with ?crs=…. Note the OGC default still applies:
-  # without it they get CRS84, not LV95, per OGC API - Features Part 2. Likewise
-  # bbox is interpreted as CRS84 unless bbox-crs is passed as well.
-  sample-mch-param-lv95:
-    type: collection
-    title: Sample MCH Parameter (LV95)
-    description: Sample MCH Parameter, reprojected to CH1903+ / LV95 (EPSG:2056)
-    keywords: [switzerland, geodata, features, swisstopo, lv95]
-    links:
-      - type: text/html
-        rel: canonical
-        title: swisstopo
-        href: https://www.swisstopo.admin.ch
-        hreflang: en
-    extents:
-      spatial:
-        bbox: [5.9, 45.8, 10.5, 47.9]
-        crs: http://www.opengis.net/def/crs/OGC/1.3/CRS84
-      temporal:
-        begin: 2026-01-01T00:00:00Z
-        end: null
-        trs: http://www.opengis.net/def/uom/ISO-8601/0/Gregorian
-    providers:
-      - type: feature
-        name: swissgeo_oaf.provider.postgresql.SwissGeoProvider
-        data:
-          host: ${DB_HOST:-localhost}
-          port: ${DB_PORT:-5432}
-          dbname: ${DB_NAME:-service-oa-features}
-          user: ${DB_USER:-service-oa-features}
-          password: ${DB_PW:-swissgeo}
-          search_path: [public]
-        options:
-          sslmode: ${DB_SSLMODE:-prefer}
-        resource_id: swissgeo-features
-        table: sample_features_lv95
-        id_field: external_id
-        geom_field: geom
-        time_field: forecast_datetime
-        title_field: point_name
-        crs:
-          - http://www.opengis.net/def/crs/EPSG/0/2056
-          - http://www.opengis.net/def/crs/OGC/1.3/CRS84
-        storage_crs: http://www.opengis.net/def/crs/EPSG/0/2056
-        languages:
-          - en
-          - de
-          - fr
-          - it
+      - <<: *forecast-provider
+        resource_id: sample-mch-param
+        table: sample_mch_param

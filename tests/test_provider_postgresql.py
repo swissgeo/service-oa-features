@@ -88,83 +88,119 @@ class TestGetLangAndFmt:
 # ---------------------------------------------------------------------------
 
 
+def _lang_columns(field: str, **values: str) -> dict[str, str]:
+    """Build the `<field>_<lang>` columns of one per-language family."""
+    return {f"{field}_{lang}": value for lang, value in values.items()}
+
+
+_POINT_TYPE = _lang_columns(
+    "point_type", de="Zentrum Postleitzahl", fr="Centre code postal", it="Centro NPA", en="ZIP"
+)
+
+
 class TestTranslateProps:
-    def test_point_type_name_collapsed_to_requested_lang(self) -> None:
-        props = {"point_type_name": {"de": "Zentrum Postleitzahl", "fr": "Centre code postal"}}
-        _translate_props(props, "de")
-        assert props["point_type_name"] == "Zentrum Postleitzahl"
+    def test_point_type_collapsed_to_requested_lang(self) -> None:
+        props = dict(_POINT_TYPE)
+        _translate_props(props, "fr")
+        assert props == {"point_type": "Centre code postal"}
+
+    @pytest.mark.parametrize(
+        ("lang", "expected"),
+        [
+            ("de", "Zentrum Postleitzahl"),
+            ("fr", "Centre code postal"),
+            ("it", "Centro NPA"),
+            ("en", "ZIP"),
+        ],
+    )
+    def test_each_supported_lang(self, lang, expected) -> None:
+        props = dict(_POINT_TYPE)
+        _translate_props(props, lang)
+        assert props["point_type"] == expected
 
     def test_point_name_never_translated(self) -> None:
-        """point_name is plain TEXT in the source data, so it must pass through.
+        """point_name has no per-language columns in the source data, so it must pass through.
 
-        The MeteoSwiss export ships a single name per point rather than a
-        per-language struct; only point_type carries localised labels.
+        The MeteoSwiss export ships a single name per point; only point_type
+        carries localised labels.
         """
         props = {"point_name": "Delémont"}
         _translate_props(props, "de")
-        assert props["point_name"] == "Delémont"
+        assert props == {"point_name": "Delémont"}
 
     def test_parameter_description_collapsed_to_requested_lang(self) -> None:
-        props = {"parameter_description": {"de": "Deutsch", "fr": "Français"}}
+        props = _lang_columns("parameter_description", de="Deutsch", fr="Français")
         _translate_props(props, "fr")
-        assert props["parameter_description"] == "Français"
+        assert props == {"parameter_description": "Français"}
 
     def test_parameter_group_collapsed_to_requested_lang(self) -> None:
-        props = {"parameter_group": {"de": "Temperatur", "fr": "Température"}}
+        props = _lang_columns("parameter_group", de="Temperatur", fr="Température")
         _translate_props(props, "fr")
-        assert props["parameter_group"] == "Température"
+        assert props == {"parameter_group": "Température"}
 
-    def test_all_lang_struct_fields_collapsed_together(self) -> None:
+    def test_all_lang_fields_collapsed_together(self) -> None:
         props = {
-            "parameter_description": {"de": "Temperatur", "en": "Temperature"},
-            "parameter_group": {"de": "Temperatur", "en": "Temperature"},
-            "point_type_name": {"de": "Station", "en": "Station"},
-            "parameter_shortname": "tre200h0",
+            "value": 3.1,
+            **_lang_columns("point_type", de="Station", fr="Station", it="Stazione", en="Station"),
             "point_name": "Genève",
             "station_abbr": "GVE",
-            "value": 3.1,
+            "parameter_shortname": "tre200h0",
+            **_lang_columns("parameter_description", de="Temperatur", en="Temperature"),
+            **_lang_columns("parameter_group", de="Temperatur", en="Temperature"),
+            "parameter_unit": "°C",
         }
+        _translate_props(props, "it")
+        assert props == {
+            "value": 3.1,
+            "point_type": "Stazione",
+            "point_name": "Genève",
+            "station_abbr": "GVE",
+            "parameter_shortname": "tre200h0",
+            # No _it column: falls back to en.
+            "parameter_description": "Temperature",
+            "parameter_group": "Temperature",
+            "parameter_unit": "°C",
+        }
+
+    def test_collapsed_field_keeps_position_of_its_first_column(self) -> None:
+        props = {"value": 1.0, **_POINT_TYPE, "point_name": "Bern"}
         _translate_props(props, "de")
-        assert props["parameter_description"] == "Temperatur"
-        assert props["parameter_group"] == "Temperatur"
-        assert props["point_type_name"] == "Station"
-        # Non-struct columns pass through untouched.
-        assert props["parameter_shortname"] == "tre200h0"
-        assert props["point_name"] == "Genève"
-        assert props["station_abbr"] == "GVE"
-        assert props["value"] == 3.1
+        assert list(props) == ["value", "point_type", "point_name"]
 
     def test_accepts_babel_locale(self) -> None:
-        locale = Locale("de")
-        props = {"point_type_name": {"de": "Deutsch", "fr": "Français"}}
-        _translate_props(props, locale)
-        assert props["point_type_name"] == "Deutsch"
+        props = dict(_POINT_TYPE)
+        _translate_props(props, Locale("de"))
+        assert props["point_type"] == "Zentrum Postleitzahl"
 
-    def test_falls_back_to_first_lang_when_requested_missing(self) -> None:
-        props = {"point_type_name": {"de": "Deutsch"}}
+    def test_falls_back_to_en_when_requested_missing(self) -> None:
+        props = _lang_columns("point_type", de="Deutsch", en="English")
         _translate_props(props, "it")
-        assert props["point_type_name"] == "Deutsch"
+        assert props["point_type"] == "English"
 
-    def test_no_language_leaves_struct_untouched(self) -> None:
-        props = {"point_type_name": {"de": "Deutsch", "fr": "Français"}}
+    def test_falls_back_to_first_present_when_requested_and_en_missing(self) -> None:
+        props = _lang_columns("point_type", fr="Français", de="Deutsch")
+        _translate_props(props, "it")
+        assert props["point_type"] == "Deutsch"
+
+    def test_no_language_leaves_columns_untouched(self) -> None:
+        props = dict(_POINT_TYPE)
         _translate_props(props, None)
-        assert props["point_type_name"] == {"de": "Deutsch", "fr": "Français"}
+        assert props == _POINT_TYPE
 
-    def test_non_dict_field_untouched(self) -> None:
-        props = {"point_type_name": "plain string"}
+    def test_no_lang_columns_is_noop(self) -> None:
+        props = {"value": 1.0, "extra": "keep me"}
         _translate_props(props, "de")
-        assert props["point_type_name"] == "plain string"
+        assert props == {"value": 1.0, "extra": "keep me"}
 
-    def test_missing_field_ignored(self) -> None:
-        props = {"parameter_description": {"de": "Deutsch"}}
+    def test_unknown_lang_suffix_untouched(self) -> None:
+        """Only the known families and languages are collapsed."""
+        props = {"point_type_es": "Estación", "other_de": "Andere", **_POINT_TYPE}
         _translate_props(props, "de")
-        assert "point_type_name" not in props
-        assert props["parameter_description"] == "Deutsch"
-
-    def test_non_lang_fields_untouched(self) -> None:
-        props = {"point_type_name": {"en": "T"}, "extra": "keep me"}
-        _translate_props(props, "en")
-        assert props["extra"] == "keep me"
+        assert props == {
+            "point_type_es": "Estación",
+            "other_de": "Andere",
+            "point_type": "Zentrum Postleitzahl",
+        }
 
 
 # ---------------------------------------------------------------------------
@@ -382,7 +418,7 @@ class TestProviderQuery:
             "features": [
                 {
                     "id": "rec-1",
-                    "properties": {"point_type_name": {"de": "Titel", "fr": "Titre"}},
+                    "properties": _lang_columns("point_type", de="Titel", fr="Titre"),
                 },
             ],
         }
@@ -396,7 +432,7 @@ class TestProviderQuery:
         result = provider.query(language="de")
 
         feature = result["features"][0]
-        assert feature["properties"]["point_type_name"] == "Titel"
+        assert feature["properties"] == {"point_type": "Titel"}
         self_links = [link for link in feature["links"] if link["rel"] == "self"]
         assert len(self_links) == 1
         assert "col/items/rec-1" in self_links[0]["href"]
@@ -404,14 +440,14 @@ class TestProviderQuery:
 
     def test_geometry_left_untouched(self, monkeypatch) -> None:
         """PostGIS geometry passes through the post-processing unchanged."""
-        geometry = {"type": "Point", "coordinates": [7.4474, 46.948]}
+        geometry = {"type": "Point", "coordinates": [2600000.0, 1200000.0]}
         provider = _make_provider("col")
         parent_result = {
             "features": [
                 {
                     "id": "rec-1",
                     "geometry": geometry,
-                    "properties": {"point_type_name": {"de": "Bern"}},
+                    "properties": _lang_columns("point_type", de="Bern"),
                 },
             ],
         }
@@ -499,7 +535,9 @@ class TestProviderGet:
         provider = _make_provider("col")
         parent_result = {
             "id": "rec-1",
-            "properties": {"parameter_description": {"de": "Beschreibung", "en": "Description"}},
+            "properties": _lang_columns(
+                "parameter_description", de="Beschreibung", en="Description"
+            ),
         }
         monkeypatch.setattr(
             postgresql.PostgreSQLProvider,
@@ -511,7 +549,7 @@ class TestProviderGet:
         result = provider.get("rec-1", language="de")
 
         assert result is not None
-        assert result["properties"]["parameter_description"] == "Beschreibung"
+        assert result["properties"] == {"parameter_description": "Beschreibung"}
 
     def test_does_not_add_self_link(self, monkeypatch) -> None:
         """pygeoapi's get_collection_item() adds its own rel=self afterwards."""

@@ -34,6 +34,21 @@ class Settings(BaseSettings):
     # Metrics
     otel_enable_metrics: bool = False
 
+    # Database the sample table is seeded into on startup (swissgeo_oaf.sample_data).
+    # NOTE: the collections' providers in pygeoapi-config.yml read the same DB_*
+    # variables with the same defaults (see tests/test_settings.py).
+    db_host: str = "localhost"
+    db_port: int = 5432
+    db_name: str = "service-oa-features"
+    db_user: str = "service-oa-features"
+    db_pw: str = "swissgeo"
+    db_sslmode: str = "prefer"
+    db_connect_timeout: int = 10
+
+    # Recreate and seed the sample_mch_param table behind the sample-mch-param
+    # collection when the app starts.
+    sample_data_enabled: bool = True
+
     # Size of the thread pool running the pygeoapi API calls.
     threadpool_max_workers: int = 16
 

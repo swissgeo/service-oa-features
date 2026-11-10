@@ -1,6 +1,6 @@
 """Rebuild the committed sample-data subset from the full MeteoSwiss OGD export.
 
-Dev-only tool. `scripts/sample-data/` is what `init_database.py` seeds from and
+Dev-only tool. `swissgeo_oaf/sample-data/` is what `swissgeo_oaf/sample_data.py` seeds from and
 it is committed, so this script only needs to run when the subset should be
 refreshed -- a newer forecast run, another parameter, more points or more steps.
 
@@ -18,7 +18,7 @@ Usage::
     uv run scripts/make_sample_data.py [SOURCE_DIR]
 
 Each output file keeps its input's name, column layout and `;` delimiter, so it
-stays a drop-in subset that `init_database.py` can read the same way it would
+stays a drop-in subset that `swissgeo_oaf/sample_data.py` can read the same way it would
 read the full export. Two deliberate differences:
 
 * the output is UTF-8 where the source is cp1252, so the committed files diff
@@ -41,7 +41,7 @@ logger = logging.getLogger("make_sample_data")
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_SOURCE_DIR = REPO_ROOT / "sample-data"
-TARGET_DIR = Path(__file__).resolve().parent / "sample-data"
+TARGET_DIR = REPO_ROOT / "swissgeo_oaf" / "sample-data"
 
 SOURCE_ENCODING = "cp1252"
 TARGET_ENCODING = "utf-8"
@@ -228,13 +228,14 @@ def main() -> int:
     scans = {path: _scan_forecast(path) for path in forecast_files}
 
     # Points must appear in every value file as well as in the metadata, so that
-    # each selected point has a complete set of readings. `geom` is NOT NULL, which
-    # is what rules out the points the metadata does not describe.
+    # each selected point has a complete set of readings. The point_type_* labels
+    # are NOT NULL, which is what rules out the points the metadata does not
+    # describe.
     forecast_points = set.intersection(*(points for points, _ in scans.values()))
     undocumented = forecast_points - documented
     if undocumented:
         logger.info(
-            "ignoring %d forecast point(s) with no metadata, hence no coordinates",
+            "ignoring %d forecast point(s) with no metadata",
             len(undocumented),
         )
     selected = _select_points(forecast_points & documented)

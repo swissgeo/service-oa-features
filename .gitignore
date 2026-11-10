@@ -2,7 +2,7 @@
 .generated
 
 # The full MeteoSwiss OGD export (~32 MB) that scripts/make_sample_data.py reads.
-# Anchored to the repo root: scripts/sample-data/ is the committed subset.
+# Anchored to the repo root: swissgeo_oaf/sample-data/ is the committed subset.
 /sample-data/
 
 # Byte-compiled / optimized / DLL files
@@ -225,6 +225,7 @@ __marimo__/
 
 # Locally generated pygeoapi OpenAPI document
 pygeoapi-openapi.yml
+pygeoapi-config.generated.yml
 
 # git conflict files
 *.orig

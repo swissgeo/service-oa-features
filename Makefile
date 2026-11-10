@@ -25,15 +25,56 @@ PYTHON := $(UV_RUN) python3
 TEST := $(UV_RUN) pytest
 RUFF := $(UV_RUN) ruff
 TY := $(UV_RUN) ty
+PRE_COMMIT := $(UV_RUN) pre-commit
+UVICORN := $(UV_RUN) uvicorn
+
+# Application specific
+APP_PACKAGE := swissgeo_oaf
+HTTP_PORT ?= 8080
+SERVE_ARGS := $(APP_PACKAGE).app:APP --host 0.0.0.0 --port $(HTTP_PORT) \
+	--log-config config-files/logging-conf.yaml
+
+# The app always runs on the host, so one env file covers both. uv loads it into the environment of every `uv run` below; `dockerrun` passes
+# the relevant values through to the container, which runs with --net=host.
+# `.env` is created from `.env.default`; `.env.local` overrides it when present.
+ENV_FILE ?= $(if $(wildcard .env.local),.env.local,.env)
+# $(wildcard ...) so the variable is empty when the file does not exist: uv errors
+# out on a missing UV_ENV_FILE, which would break CI-only targets (format, lint,
+# test) that need no runtime config.
+export UV_ENV_FILE := $(wildcard $(ENV_FILE))
+
+# Read back the value the recipes need at the shell level (i.e. outside `uv run`).
+OTEL_ENDPOINT = $(shell sed -n 's/^OTEL_EXPORTER_OTLP_ENDPOINT=//p' $(ENV_FILE) 2>/dev/null)
+
+# Tables the collections in pygeoapi-config.yml are backed by
+DB_TABLES := sample_features sample_features_lv95
+
+.env:
+	cp .env.default .env
+
+
+.PHONY: git-info
+git-info: ## Print the current version information
+	@echo "GIT_HASH=$(GIT_HASH)"
+	@echo "GIT_HASH_SHORT=$(GIT_HASH_SHORT)"
+	@echo "GIT_BRANCH=$(GIT_BRANCH)"
+	@echo "GIT_DIRTY=$(GIT_DIRTY)"
+	@echo "GIT_TAG=$(GIT_TAG)"
+	@echo "AUTHOR=$(AUTHOR)"
+	@echo "DOCKER_IMG_LOCAL_TAG=$(DOCKER_IMG_LOCAL_TAG)"
 
 
 .PHONY: setup
-setup: ## Create virtual env with all packages for development uv
+setup: .env ## Create virtualenv with all packages for development
 	uv sync
+	$(PRE_COMMIT) install
+	# Start a new shell with the virtualenv activated and the .env variables exported,
+	# so that the app and the scripts find the local PostGIS.
+	uv run $$SHELL
 
 
 .PHONY: ci
-ci: ## Create virtual env with all packages for development using the uv.lock (CI)
+ci: .env ## Create virtual env with all packages for development using the uv.lock (CI)
 	uv sync --frozen
 
 
@@ -52,6 +93,17 @@ ci-check-format: format ## Check the format (CI)
 		exit 1; \
 	fi
 
+.PHONY: services-up
+services-up: ## Start PostGIS, collector, Jaeger, Prometheus and (re)apply the schema and sample data
+	docker compose up --detach --wait postgres otel-collector jaeger prometheus
+	docker compose run --rm --build init-database
+
+
+.PHONY: services-down
+services-down: ## Stop the backing services (the PostGIS data volume is kept)
+	docker compose down
+
+
 .PHONY: dbshell
 dbshell: ## Open a psql shell on the local PostGIS container
 	docker compose exec postgres psql -U swissgeo -d swissgeo
@@ -59,12 +111,40 @@ dbshell: ## Open a psql shell on the local PostGIS container
 
 .PHONY: reset-db
 reset-db: ## Re-apply the PostGIS bootstrap schema/seed data to the running database
-	docker compose run --rm init-database
+	docker compose run --rm --build init-database
+
+
+.PHONY: check-db
+check-db: .env ## Check that PostGIS is reachable with the expected tables
+	@$(PYTHON) scripts/check_database.py $(DB_TABLES)
+
+
+.PHONY: openapi
+openapi: .env ## Generate the OpenAPI document from the pygeoapi config
+	# $$PYGEOAPI_* come from $(ENV_FILE), which uv loads into the child environment,
+	# so expand them inside the `uv run` shell rather than in make's.
+	$(UV_RUN) sh -c 'pygeoapi openapi generate "$$PYGEOAPI_CONFIG" --output-file "$$PYGEOAPI_OPENAPI"'
+
+
+.PHONY: serve
+serve: check-db openapi ## Serve the application locally
+	$(UVICORN) $(SERVE_ARGS) --reload
+
+
+.PHONY: serve-debug
+serve-debug: check-db openapi ## Serve the application locally for debugging
+	$(PYTHON) -m debugpy --listen localhost:5678 --wait-for-client \
+		-m uvicorn $(SERVE_ARGS)
 
 
 .PHONY: dockerbuild
 dockerbuild:  ## Build the docker image locally
-	docker compose build
+	docker build \
+		--build-arg GIT_HASH="$(GIT_HASH)" \
+		--build-arg GIT_BRANCH="$(GIT_BRANCH)" \
+		--build-arg GIT_DIRTY="$(GIT_DIRTY)" \
+		--build-arg VERSION="$(GIT_TAG)" \
+		--build-arg AUTHOR="$(AUTHOR)" -t $(DOCKER_IMG_LOCAL_TAG) .
 
 
 .PHONY: dockerlogin
@@ -73,14 +153,22 @@ dockerlogin: ## Login to the AWS Docker Registry (ECR)
 
 
 .PHONY: dockerpush
-dockerpush: dockerlogin dockerbuild ## Push to the docker registry
-	docker tag pygeoapi-custom $(DOCKER_IMG_LOCAL_TAG)
-	docker push $(DOCKER_IMG_LOCAL_TAG)
+dockerpush: dockerbuild ## Push to the docker registry
+	set -o pipefail; \
+	docker push $(DOCKER_IMG_LOCAL_TAG) 2>&1 | grep --color=always -E "tag invalid: .*|$$"
 
 
 .PHONY: dockerrun
-dockerrun: dockerbuild ## Run the docker image locally
-	docker compose up
+dockerrun: check-db dockerbuild ## Run the locally built docker image
+	# --net=host so that localhost:5432 (PostGIS) and localhost:4317 (collector)
+	# resolve exactly as they do for `make serve`. PYGEOAPI_* are already baked into
+	# the image, so only the connection settings are passed through.
+	docker run \
+		-it --net=host \
+		--env-file <(grep -E '^DB_' $(ENV_FILE)) \
+		--env OTEL_EXPORTER_OTLP_ENDPOINT="$(OTEL_ENDPOINT)" \
+		--env OTEL_EXPORTER_OTLP_INSECURE=true \
+		$(DOCKER_IMG_LOCAL_TAG)
 
 
 .PHONY: lint

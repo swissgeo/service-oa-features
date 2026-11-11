@@ -32,7 +32,8 @@ This service exposes Swiss geospatial data as an OGC API Features endpoint. pyge
 
 ```
 uvicorn (swissgeo_oaf/app.py), at startup:
-  ├─ swissgeo_oaf.sample_data – recreates and seeds the sample_mch_param table
+  ├─ swissgeo_oaf.sample_data – recreates and seeds the sample_mch_param table,
+  │                             creates/fills tbl_ogd-local-forecasting-point-meta if empty
   └─ swissgeo_oaf.discovery – one collection per tbl_ogd-local-forecasting-* table,
                               added to the static ones (sample-mch-param) and
                               written to the generated pygeoapi config + OpenAPI doc
@@ -97,8 +98,9 @@ The collections come from two places:
 
 The forecast pipeline creates and fills the `tbl_ogd-local-forecasting-*` tables, so they are
 not listed in the config. At startup, before pygeoapi reads its config, `swissgeo_oaf.discovery`
-serves every PostGIS table matching `tbl_ogd-local-forecasting-*` as a collection, except
-`tbl_ogd-local-forecasting-point-meta`. A discovered collection never replaces a static one
+serves every PostGIS table matching `tbl_ogd-local-forecasting-*` as a collection, including
+the point metadata table `tbl_ogd-local-forecasting-point-meta` (collection
+`ogd-local-forecasting-point-meta`). A discovered collection never replaces a static one
 with the same id.
 
 The rule lives under the `swissgeo.discovery` key of `pygeoapi-config.yml`. pygeoapi ignores
@@ -177,7 +179,7 @@ Key environment variables:
 | `DB_USER` | `service-oa-features` | PostGIS user |
 | `DB_PW` | `swissgeo` | PostGIS password |
 | `DB_SSLMODE` | `prefer` | libpq `sslmode` |
-| `SAMPLE_DATA_ENABLED` | `true` | Recreate and seed the `sample_mch_param` table on startup |
+| `SAMPLE_DATA_ENABLED` | `true` | Recreate and seed the `sample_mch_param` table on startup, and seed `tbl_ogd-local-forecasting-point-meta` if empty |
 | `PYGEOAPI_CONFIG` | `/pygeoapi/pygeoapi-config.yml` | pygeoapi config file path |
 | `THREADPOOL_MAX_WORKERS` | `16` | Threads running the API calls |
 | `DISCOVERY_REFRESH_SECONDS` | `300` | Interval of the table discovery in the running app; `0` discovers at startup only |
@@ -287,6 +289,11 @@ This is for verifying the deployment artifact; day-to-day development uses `make
   `geometry` (GIST), `datetime` and `feature_id`. Its name keeps it out of the discovery. Set
   `SAMPLE_DATA_ENABLED=false` to skip it; then nothing creates the table and the collection
   fails.
+- **In the same run, the app creates `tbl_ogd-local-forecasting-point-meta` if it is missing,
+  and fills it from `ogd-local-forecasting_meta_point.csv` if it is empty.** This step is not
+  destructive, because the pipeline may own that table too. An existing table or existing rows
+  are left as they are. As a result, a changed CSV is not reloaded: drop the table to reseed it.
+  The discovery serves the table as `ogd-local-forecasting-point-meta`.
 
 The seed rows are read from the CSVs in `swissgeo_oaf/sample-data/`, shipped with the package.
 They are a committed subset of the MeteoSwiss OGD local-forecasting export. See

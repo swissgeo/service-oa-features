@@ -23,7 +23,7 @@ Example rule::
     swissgeo:
       discovery:
         - tables: tbl_ogd-local-forecasting-*
-          exclude: [tbl_ogd-local-forecasting-point-meta]
+          exclude: [tbl_ogd-local-forecasting-tmp-*]
           collection_id: ogd-local-forecasting-{match}
           title_columns: parameter_description
           resource:

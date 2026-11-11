@@ -7,15 +7,20 @@ import pytest
 
 from swissgeo_oaf import sample_data
 from swissgeo_oaf.sample_data import (
+    POINT_META_TABLE,
     SAMPLE_TABLE,
+    iter_point_meta,
     iter_sample_features,
     seed,
+    seed_point_meta,
     seed_sample_data,
 )
 from swissgeo_oaf.settings import Settings
 
 # The committed subset: 100 points x 10 hourly steps of one parameter.
 _SAMPLE_ROWS = 1000
+# Rows of the committed ogd-local-forecasting_meta_point.csv.
+_POINT_ROWS = 100
 
 
 class TestIterSampleFeatures:
@@ -97,6 +102,71 @@ class TestSeed:
             "1_1_tre200h0_20260819210000"
         )
         assert first[-2:] == (2771031.0, 1184830.0)
+
+
+class TestIterPointMeta:
+    def test_reads_every_point(self) -> None:
+        points = list(iter_point_meta())
+
+        assert len(points) == _POINT_ROWS
+        assert {point["point_type_id"] for point in points} == {1, 2, 3}
+
+    def test_has_every_point_column(self) -> None:
+        point = next(iter_point_meta())
+
+        assert set(sample_data._POINT_COLUMNS) | {"east", "north"} <= set(point)
+        assert (point["point_id"], point["station_abbr"], point["postal_code"]) == (1, "ARO", None)
+        assert (point["east"], point["north"]) == (2771031.0, 1184830.0)
+
+
+class TestSeedPointMeta:
+    @pytest.fixture
+    def inserted(self, monkeypatch: pytest.MonkeyPatch) -> list[tuple]:
+        rows: list[tuple] = []
+
+        def fake_execute_values(_cur, _statement, argslist, **_kwargs) -> None:
+            rows.extend(argslist)
+
+        monkeypatch.setattr(sample_data.extras, "execute_values", fake_execute_values)
+        return rows
+
+    def test_creates_without_dropping(self, inserted: list[tuple]) -> None:  # noqa: ARG002
+        cur = MagicMock()
+        cur.fetchone.return_value = (False,)
+
+        seed_point_meta(cur)
+
+        statements = " ".join(_executed(cur))
+        assert "DROP" not in statements
+        assert "CREATE TABLE IF NOT EXISTS" in statements
+        assert "CREATE INDEX IF NOT EXISTS" in statements
+        assert f"idx_{POINT_META_TABLE}_geometry" in statements
+
+    def test_fills_an_empty_table(self, inserted: list[tuple]) -> None:
+        cur = MagicMock()
+        cur.fetchone.return_value = (False,)
+
+        assert seed_point_meta(cur) == _POINT_ROWS
+        assert len(inserted) == _POINT_ROWS
+        assert len(inserted[0]) == len(sample_data._POINT_COLUMNS) + 2
+        assert inserted[0][-2:] == (2771031.0, 1184830.0)
+
+    def test_leaves_a_filled_table_alone(self, inserted: list[tuple]) -> None:
+        cur = MagicMock()
+        cur.fetchone.return_value = (True,)
+
+        assert seed_point_meta(cur) == 0
+        assert inserted == []
+
+    def test_seed_runs_it_under_the_lock(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sample_data.extras, "execute_values", lambda *_a, **_k: None)
+        called: list[object] = []
+        monkeypatch.setattr(sample_data, "seed_point_meta", called.append)
+        cur = MagicMock()
+
+        seed(cur)
+
+        assert called == [cur]
 
 
 class TestSeedSampleData:

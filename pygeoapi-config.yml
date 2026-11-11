@@ -65,7 +65,7 @@ metadata:
     role: pointOfContact
 
 # Not a pygeoapi key: read by swissgeo_oaf.discovery when the app starts. Every
-# PostGIS table matching `tables` (minus `exclude`) is served as a collection
+# PostGIS table matching `tables` (minus the optional `exclude` globs) is served as a collection
 # built from `resource`, with `table` set to the discovered table. In
 # `collection_id`, `title` and `description`, {match} is what the `*` matched
 # (e.g. tre200px) and {table} the full table name. `title_columns` names a
@@ -80,8 +80,6 @@ metadata:
 swissgeo:
   discovery:
     - tables: tbl_ogd-local-forecasting-*
-      exclude:
-        - tbl_ogd-local-forecasting-point-meta
       collection_id: ogd-local-forecasting-{match}
       title_columns: parameter_description
       # The tables store geometry in CH1903+ / LV95 (EPSG:2056). storage_crs names

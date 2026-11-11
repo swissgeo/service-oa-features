@@ -1,4 +1,4 @@
-"""Create and seed the sample table behind the `sample-mch-param` collection.
+"""Create and seed the sample tables: `sample_mch_param` and the point metadata.
 
 Runs when the app starts (see ``app.py``), before the collection discovery and
 before pygeoapi loads its config, so the table exists by the time the
@@ -28,6 +28,13 @@ for the lock seeds after the first one commits. Readers -- the pods already
 serving -- block on the table lock meanwhile rather than seeing it missing, and a
 failed run leaves the previous table in place.
 
+Besides, the point metadata table `tbl_ogd-local-forecasting-point-meta` (see
+`_POINT_META_COLUMNS`) is created and filled from the point CSV, so the collection
+discovery serves it. Unlike `sample_mch_param` it carries the real table's name,
+which the forecast pipeline may write too, so it is *not* destructive: the table
+is created only if missing, and filled only while empty. Its rows are therefore
+not refreshed when the CSV changes; drop the table to reseed it.
+
 The rows are read from the CSVs in `sample-data/` next to this module (shipped
 as package data), a committed subset of the MeteoSwiss OGD local-forecasting
 export -- see `scripts/make_sample_data.py` for how to rebuild it.
@@ -50,6 +57,7 @@ from swissgeo_oaf.settings import Settings, get_settings
 logger = logging.getLogger(__name__)
 
 SAMPLE_TABLE = "sample_mch_param"
+POINT_META_TABLE = "tbl_ogd-local-forecasting-point-meta"
 
 # Key of the transaction-level advisory lock serialising concurrent runs. Any
 # constant works, as long as nothing else in the database uses it.
@@ -130,6 +138,39 @@ def _create_index_sql() -> list[sql.Composed]:
         for column in _BTREE_COLUMNS
     )
     return statements
+
+
+# The point metadata table, column for column the upstream DDL. No unique key on
+# (point_id, point_type_id) upstream either; the serial `id` is the primary key.
+_POINT_META_COLUMNS = f"""
+  id                 SERIAL4       NOT NULL,
+  point_id           INT4          NOT NULL,
+  point_type_id      INT4          NOT NULL,
+  point_name         VARCHAR(256),
+  station_abbr       VARCHAR(64),
+  postal_code        INT4,
+  point_type_de      VARCHAR(64)   NOT NULL,
+  point_type_fr      VARCHAR(64)   NOT NULL,
+  point_type_it      VARCHAR(64)   NOT NULL,
+  point_type_en      VARCHAR(64)   NOT NULL,
+  point_height_masl  FLOAT8,
+  geometry           GEOMETRY(Geometry, {LV95_SRID}),"""
+
+
+def _create_point_meta_sql() -> list[sql.Composed]:
+    """CREATE TABLE / INDEX IF NOT EXISTS: leaves a table the pipeline made alone."""
+    table = sql.Identifier(POINT_META_TABLE)
+    # _POINT_META_COLUMNS is a constant, never user input.
+    return [
+        sql.SQL(
+            "CREATE TABLE IF NOT EXISTS {table} ("
+            + _POINT_META_COLUMNS
+            + "\n  CONSTRAINT {pk} PRIMARY KEY (id)\n)"
+        ).format(table=table, pk=sql.Identifier(f"pk_{POINT_META_TABLE}")),
+        sql.SQL("CREATE INDEX IF NOT EXISTS {index} ON {table} USING GIST (geometry)").format(
+            index=sql.Identifier(f"idx_{POINT_META_TABLE}_geometry"), table=table
+        ),
+    ]
 
 
 # How many rows are handed to the server per INSERT round trip. The committed
@@ -241,6 +282,12 @@ def _load_points() -> dict[tuple[int, int], dict]:
         }
         for row in _iter_csv(POINT_META_CSV)
     }
+
+
+def iter_point_meta() -> Iterator[dict]:
+    """Yield one row per point of the point CSV, in the point metadata table's shape."""
+    for (point_id, point_type_id), point in _load_points().items():
+        yield {"point_id": point_id, "point_type_id": point_type_id, **point}
 
 
 def _forecast_files() -> list[tuple[Path, str, datetime]]:
@@ -392,8 +439,31 @@ def _insert(cur: cursor, table: str, columns: tuple[str, ...], features: Iterato
     return inserted
 
 
+def seed_point_meta(cur: cursor) -> int:
+    """Create the point metadata table if missing and fill it if empty.
+
+    Returns the number of rows inserted: 0 when the table already had rows.
+    """
+    for statement in _create_point_meta_sql():
+        cur.execute(statement)
+    cur.execute(
+        sql.SQL("SELECT EXISTS (SELECT 1 FROM {table})").format(
+            table=sql.Identifier(POINT_META_TABLE)
+        )
+    )
+    if cur.fetchone()[0]:
+        logger.info("%s already has rows, not seeding it", POINT_META_TABLE)
+        return 0
+    seeded = _insert(cur, POINT_META_TABLE, _POINT_COLUMNS, iter_point_meta())
+    logger.info("seeded %d point(s) into %s", seeded, POINT_META_TABLE)
+    return seeded
+
+
 def seed(cur: cursor) -> int:
     """Recreate the sample table and insert one row per sample forecast value.
+
+    Then creates and fills the point metadata table if needed (see
+    :func:`seed_point_meta`). Returns the number of sample forecast values inserted.
 
     Must run inside a transaction: the advisory lock is released on commit.
     """
@@ -414,6 +484,10 @@ def seed(cur: cursor) -> int:
 
     seeded = _insert(cur, SAMPLE_TABLE, _SEED_COLUMNS, features())
     logger.info("seeded %d sample feature(s) into %s", seeded, SAMPLE_TABLE)
+
+    # Under the same advisory lock, so pods starting together don't both find it
+    # empty and seed it twice.
+    seed_point_meta(cur)
     return seeded
 
 

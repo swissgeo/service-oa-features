@@ -46,7 +46,8 @@ class Settings(BaseSettings):
     db_connect_timeout: int = 10
 
     # Recreate and seed the sample_mch_param table behind the sample-mch-param
-    # collection when the app starts.
+    # collection when the app starts, and seed tbl_ogd-local-forecasting-point-meta
+    # if it is empty.
     sample_data_enabled: bool = True
 
     # Seconds between two runs of the table discovery in the running app

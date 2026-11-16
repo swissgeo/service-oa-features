@@ -7,6 +7,8 @@ from typing import cast
 from unittest.mock import MagicMock
 
 import yaml
+from babel import Locale
+from pygeoapi import l10n
 from pygeoapi.api import API
 
 import pytest
@@ -38,6 +40,12 @@ _SOURCE = {
         ]
     },
 }
+
+
+@pytest.fixture(autouse=True)
+def _empty_translated_config_cache() -> None:
+    """pygeoapi's per-locale cache is process-wide; start every test without it."""
+    l10n._cfg_cache.clear()
 
 
 @pytest.fixture
@@ -110,6 +118,43 @@ def test_new_table_is_swapped_in(refresher: CollectionRefresher, tables: list[st
 
     # Same tables on the next tick: nothing to do.
     assert refresher.refresh() is False
+
+
+def test_swap_invalidates_translated_config_cache(
+    refresher: CollectionRefresher, tables: list[str]
+) -> None:
+    """HTML in a locale rendered before the refresh must see the new collections.
+
+    Regression: pygeoapi caches the translated tpl_config per locale, so without
+    the invalidation a new collection's HTML page failed with an UndefinedError.
+    """
+    api = _api()
+    refresher.attach(api)
+    english = Locale("en")
+    # An HTML page rendered before the refresh caches the old collections.
+    assert list(l10n.translate_struct(api.tpl_config, english, is_config=True)["resources"]) == [
+        "old"
+    ]
+    tables.append(f"{_PREFIX}b")
+
+    assert refresher.refresh() is True
+
+    translated = l10n.translate_struct(api.tpl_config, english, is_config=True)
+    assert list(translated["resources"]) == ["static", "a", "b"]
+
+
+def test_unchanged_tables_keep_translated_config_cache(refresher: CollectionRefresher) -> None:
+    api = _api()
+    refresher.attach(api)
+    cached = l10n.translate_struct(api.tpl_config, Locale("en"), is_config=True)
+
+    assert refresher.refresh() is False
+    assert l10n.translate_struct(api.tpl_config, Locale("en"), is_config=True) is cached
+
+
+def test_invalidation_tolerates_missing_cache(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delattr(l10n, "_cfg_cache")
+    refresh._invalidate_translated_configs()
 
 
 def test_removed_table_is_dropped(refresher: CollectionRefresher, tables: list[str]) -> None:

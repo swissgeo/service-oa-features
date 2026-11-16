@@ -28,6 +28,7 @@ import logging
 import os
 from pathlib import Path
 
+from pygeoapi import l10n
 from pygeoapi.api import API
 from pygeoapi.util import yaml_load
 
@@ -102,6 +103,7 @@ class CollectionRefresher:
         api.tpl_config["resources"] = copy.deepcopy(resources)
         # A str for a JSON document, as from pygeoapi's own load_openapi_document().
         api.openapi = openapi  # ty: ignore[invalid-assignment]
+        _invalidate_translated_configs()
         self._tables = tables
         LOGGER.info("discovery refresh: now serving %d collections", len(resources))
         return True
@@ -123,3 +125,23 @@ class CollectionRefresher:
                 # Broad on purpose: keep serving the current collections and retry
                 # on the next tick, whatever went wrong (database down, bad table…).
                 LOGGER.exception("discovery refresh failed, keeping the current collections")
+
+
+def _invalidate_translated_configs() -> None:
+    """Drop pygeoapi's per-locale cache of the translated config.
+
+    Every HTML page is rendered from ``l10n.translate_struct(api.tpl_config, locale,
+    is_config=True)``, which caches its result per locale for the life of the
+    process and never notices ``tpl_config`` changing. Without this, a locale whose
+    HTML was rendered before a refresh keeps the old collections: a new collection
+    then fails with ``UndefinedError: 'dict object' has no attribute '<id>'`` (HTTP
+    500) in that locale only, and a removed one keeps being listed.
+
+    ``_cfg_cache`` is private to pygeoapi (0.24), hence the guard: should it
+    disappear, this does nothing rather than failing the refresh.
+    """
+    cache = getattr(l10n, "_cfg_cache", None)
+    if isinstance(cache, dict):
+        # A request translating concurrently may re-cache the old config, but only
+        # from a tpl_config read before the swap above; clear() itself is atomic.
+        cache.clear()

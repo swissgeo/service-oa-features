@@ -1,19 +1,16 @@
 [project]
-name = "service-oaf-pygeoadmin"
-version = "1.0.0"
-requires-python = ">=3.11"
+name = "service-oa-features"
+version = "0.0.0" # NOTE: the version is not used
+requires-python = ">=3.14"
 dependencies = [
-    "pygeoapi",
-    "tinydb",
-    "psycopg2-binary",
-    "sqlalchemy",
-    "geoalchemy2",
-    "packaging>=26.0",
-    "uvicorn[standard]",
-    "starlette",
-    "debugpy",
-    "pyyaml",
-    "pydantic-settings>=2.0",
+    "pygeoapi~=0.24",
+    "psycopg2-binary~=2.9",
+    "sqlalchemy~=2.1",
+    "geoalchemy2~=0.20",
+    "uvicorn[standard]~=0.54",
+    "starlette~=1.10",
+    "pyyaml~=6.0",
+    "pydantic-settings~=2.16",
     # List of available opentelemetry-instrumentation can be found here
     # https://github.com/open-telemetry/opentelemetry-python-contrib/tree/main/instrumentation#readme
     "opentelemetry-exporter-otlp~=1.41",
@@ -22,26 +19,49 @@ dependencies = [
     "opentelemetry-sdk~=1.41",
 ]
 
-[tool.ty.environment]
-extra-paths = ["pygeoapi-swissgeo-extensions"]
+[build-system]
+requires = ["uv_build>=0.13,<0.14"]
+build-backend = "uv_build"
 
 [dependency-groups]
+# Installed in the Docker image only when built with INSTALL_DEBUGPY=true
+debug = [
+    "debugpy",
+]
 dev = [
-    "ruff==0.17.3",
+    { include-group = "debug" },
+    "ruff",
     "ty",
     "pytest",
     "pytest-cov",
     "pytest-xdist",
+    "httpx2",
+    "pre-commit",
 ]
 
+[tool.uv.build-backend]
+# Flat layout: the package is at the repository root, not under src/
+module-name = "swissgeo_oaf"
+module-root = ""
+
+[tool.uv]
+# pygeoapi always installs it, but only its raster providers use it; we only use
+# the PostgreSQL-based SwissGeoProvider (which does need sqlalchemy and geoalchemy2).
+# Remove it from this list before configuring a raster plugin.
+exclude-dependencies = ["rasterio"]
+
+
+#===============================================================================
+# Ruff configuration
 [tool.ruff]
-src = [
-    "app",
-    "scripts",
-]
+src = [".", "scripts"]
 
-line-length = 120
-indent-width = 2
+# Same as Black.
+line-length = 100
+indent-width = 4
+
+# Assume Python 3.14
+target-version = "py314"
 
 #------------------------------------------------------------------------------
 # Linting configuration
@@ -51,7 +71,6 @@ ignore = [
     "ANN401", # Ignore Any typehint
     "ANN002", # Ignore typehint for *args
     "ANN003", # Ignore typehint for **kwargs
-    "CPY001", # Ignore missing per-file copyright notice, the license lives in LICENSE.md only
     "D",      # Ignore pydocstyle
     "EM",     # Ignore flake8-errmsg
     "TRY003", # Ignore long messages in exception constructors
@@ -61,6 +80,10 @@ ignore = [
     "TD",     # Ignore flake8-todos
     "FIX",    # Ignore fixme comments
     "COM812", # flak8-commas missing-trailing-comma is ignored to avoid conflict with formatter which enforces trailing commas
+    "CPY001", # Ignore missing copyright notice at top of file
+    "TC003", # Ignore type annotation not in TYPE_CHECKING block
+    "TC002", # Ignore type annotation not in TYPE_CHECKING block for third party import
+    "TC001", # Ignore type annotation not in TYPE_CHECKING block for first party import
 ]
 
 # Allow fix for all enabled rules (when `--fix`) is provided.
@@ -70,6 +93,8 @@ fixable = ["ALL"]
 # Allow unused variables when underscore-prefixed.
 dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
 
+#------------------------------------------------------------------------------
+# ruff ignore per files
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [
     "S101",    # Ignore usage of assert statements in tests
@@ -78,7 +103,9 @@ dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
     "PLR2004", # Ignore magic number in tests
     "SLF001",  # Ignore private member access in tests
 ]
-
+"scripts/check_database.py" = [
+    "T201",    # CLI used by `make check-db`, reports to the terminal
+]
 
 #------------------------------------------------------------------------------
 # Isort configuration
@@ -94,3 +121,20 @@ section-order = [
 
 [tool.ruff.lint.isort.sections]
 test = ["pytest"]
+
+#===============================================================================
+# ty configuration
+[tool.ty.src]
+exclude = ["**/__pycache__"]
+
+
+#===============================================================================
+# Pytest configuration
+[tool.pytest]
+python_files = ["test_*.py"]
+
+
+#==============================================================================
+# Coverage configuration
+[tool.coverage.run]
+omit = ["*/tests/*"]

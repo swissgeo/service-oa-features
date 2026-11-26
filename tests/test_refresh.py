@@ -1,6 +1,7 @@
 """Tests for the periodic discovery refresh."""
 
 import asyncio
+from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import cast
@@ -26,13 +27,19 @@ _SOURCE = {
             {
                 "tables": f"{_PREFIX}*",
                 "collection_id": "{match}",
+                "temporal_extent": True,
                 "resource": {
                     "type": "collection",
                     "title": "Forecast {match}",
+                    "extents": {
+                        "spatial": {"bbox": [5.9, 45.8, 10.5, 47.9]},
+                        "temporal": {"begin": None, "end": None, "trs": "gregorian"},
+                    },
                     "providers": [
                         {
                             "type": "feature",
                             "data": {"host": "${DB_HOST:-localhost}", "search_path": ["public"]},
+                            "time_field": "datetime",
                         }
                     ],
                 },
@@ -48,8 +55,27 @@ def _empty_translated_config_cache() -> None:
     l10n._cfg_cache.clear()
 
 
+def _hour(hour: int) -> datetime:
+    return datetime(2026, 11, 26, hour, tzinfo=UTC)
+
+
 @pytest.fixture
-def tables(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+def time_ranges(monkeypatch: pytest.MonkeyPatch) -> dict[str, tuple[datetime, datetime]]:
+    """Stub the tables' time ranges: the returned (mutable) dict, by table."""
+    time_ranges = {f"{_PREFIX}a": (_hour(0), _hour(10))}
+    monkeypatch.setattr(
+        discovery,
+        "_time_range",
+        lambda _conn, _schema, table, _column: time_ranges.get(table),
+    )
+    return time_ranges
+
+
+@pytest.fixture
+def tables(
+    monkeypatch: pytest.MonkeyPatch,
+    time_ranges: dict[str, tuple[datetime, datetime]],  # noqa: ARG001
+) -> list[str]:
     """Stub the database: the geometry tables are the returned (mutable) list."""
     tables = [f"{_PREFIX}a"]
     monkeypatch.setattr(discovery, "_connect", lambda _provider: MagicMock())
@@ -150,6 +176,86 @@ def test_unchanged_tables_keep_translated_config_cache(refresher: CollectionRefr
 
     assert refresher.refresh() is False
     assert l10n.translate_struct(api.tpl_config, Locale("en"), is_config=True) is cached
+
+
+def _served_api(refresher: CollectionRefresher, tables: list[str]) -> API:
+    """An API serving the current discovery, as after startup, via a first full refresh."""
+    api = _api()
+    refresher.attach(api)
+    tables.append(f"{_PREFIX}b")
+    assert refresher.refresh() is True
+    return api
+
+
+def test_new_table_gets_its_temporal_extent(
+    refresher: CollectionRefresher, tables: list[str]
+) -> None:
+    api = _served_api(refresher, tables)
+    temporal = api.config["resources"]["a"]["extents"]["temporal"]
+    assert temporal == {"begin": _hour(0), "end": _hour(10), "trs": "gregorian"}
+    # b has no time range yet: the template's extent.
+    assert api.config["resources"]["b"]["extents"]["temporal"]["begin"] is None
+
+
+def test_moved_time_range_swaps_extent_only(
+    refresher: CollectionRefresher,
+    tables: list[str],
+    time_ranges: dict[str, tuple[datetime, datetime]],
+) -> None:
+    api = _served_api(refresher, tables)
+    old_resources = api.config["resources"]
+    old_a = old_resources["a"]
+    old_b = old_resources["b"]
+    english = Locale("en")
+    l10n.translate_struct(api.tpl_config, english, is_config=True)
+    refresher.openapi_path.unlink()
+    time_ranges[f"{_PREFIX}a"] = (_hour(6), _hour(16))
+
+    assert refresher.refresh() is True
+
+    resources = api.config["resources"]
+    temporal = resources["a"]["extents"]["temporal"]
+    assert temporal == {"begin": _hour(6), "end": _hour(16), "trs": "gregorian"}
+    assert resources["a"]["extents"]["spatial"] == old_a["extents"]["spatial"]
+    assert resources["b"] is old_b
+    # Replaced, not mutated: running requests keep the old extent.
+    assert old_resources["a"] is old_a
+    assert old_a["extents"]["temporal"]["begin"] == _hour(0)
+    assert api.tpl_config["resources"] == resources
+    translated = l10n.translate_struct(api.tpl_config, english, is_config=True)
+    assert translated["resources"]["a"]["extents"]["temporal"]["begin"] == _hour(6)
+    # No regeneration of the config or OpenAPI document.
+    assert not refresher.openapi_path.exists()
+
+    assert refresher.refresh() is False
+
+
+def test_time_range_appearing_rebuilds(
+    refresher: CollectionRefresher,
+    tables: list[str],
+    time_ranges: dict[str, tuple[datetime, datetime]],
+) -> None:
+    api = _served_api(refresher, tables)
+    refresher.openapi_path.unlink()
+    time_ranges[f"{_PREFIX}b"] = (_hour(1), _hour(2))
+
+    assert refresher.refresh() is True
+
+    assert api.config["resources"]["b"]["extents"]["temporal"]["begin"] == _hour(1)
+    assert refresher.openapi_path.exists()
+
+
+def test_table_emptied_falls_back_to_template_extent(
+    refresher: CollectionRefresher,
+    tables: list[str],
+    time_ranges: dict[str, tuple[datetime, datetime]],
+) -> None:
+    api = _served_api(refresher, tables)
+    del time_ranges[f"{_PREFIX}a"]
+
+    assert refresher.refresh() is True
+
+    assert api.config["resources"]["a"]["extents"]["temporal"]["begin"] is None
 
 
 def test_invalidation_tolerates_missing_cache(monkeypatch: pytest.MonkeyPatch) -> None:

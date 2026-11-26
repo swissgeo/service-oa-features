@@ -1,7 +1,9 @@
 """Tests for the startup discovery of PostGIS tables."""
 
 import copy
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 from unittest.mock import MagicMock
 
 import yaml
@@ -15,7 +17,7 @@ _PREFIX = "tbl_ogd-local-forecasting-"
 _PASSWORD_REFERENCE = "${DB_PW:-swissgeo}"  # noqa: S105 -- an env reference, not a password
 _POINT_META = f"{_PREFIX}point-meta"
 
-_TEMPLATE = {
+_TEMPLATE: dict[str, Any] = {
     "type": "collection",
     "title": "Local forecast {match}",
     "description": "From table {table}",
@@ -29,9 +31,17 @@ _TEMPLATE = {
                 "search_path": ["public"],
             },
             "id_field": "id",
+            "time_field": "datetime",
         }
     ],
+    "extents": {
+        "spatial": {"bbox": [5.9, 45.8, 10.5, 47.9]},
+        "temporal": {"begin": None, "end": None, "trs": "gregorian"},
+    },
 }
+
+_BEGIN = datetime(2026, 11, 26, 0, tzinfo=UTC)
+_END = datetime(2026, 12, 5, 23, tzinfo=UTC)
 
 _RULE = {
     "tables": f"{_PREFIX}*",
@@ -144,7 +154,11 @@ def database(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     conn = MagicMock()
     conn.tables = [f"{_PREFIX}tre200px", _POINT_META, "spatial_ref_sys_like"]
     conn.titles = {}
+    conn.time_ranges = {}
     monkeypatch.setattr(discovery, "_connect", lambda _provider: conn)
+    monkeypatch.setattr(
+        discovery, "_time_range", lambda c, _schema, table, _column: c.time_ranges.get(table)
+    )
     monkeypatch.setattr(discovery, "_geometry_tables", lambda c, _schema: c.tables)
     monkeypatch.setattr(
         discovery, "_lang_title", lambda c, _schema, table, _prefix: c.titles.get(table)
@@ -213,6 +227,35 @@ class TestDiscover:
         result = discover(_config(rule), _config(rule))
         title = result["resources"]["ogd-local-forecasting-tre200px"]["title"]
         assert title == "Local forecast tre200px"
+
+    def test_temporal_extent_from_table(self, database: MagicMock) -> None:
+        database.time_ranges[f"{_PREFIX}tre200px"] = (_BEGIN, _END)
+        rule = {**_RULE, "temporal_extent": True}
+
+        result = discover(_config(rule), _config(rule))
+
+        extents = result["resources"]["ogd-local-forecasting-tre200px"]["extents"]
+        assert extents["temporal"] == {"begin": _BEGIN, "end": _END, "trs": "gregorian"}
+        assert extents["spatial"] == _TEMPLATE["extents"]["spatial"]
+
+    def test_template_extent_without_time_range(self, database: MagicMock) -> None:  # noqa: ARG002
+        rule = {**_RULE, "temporal_extent": True}
+        result = discover(_config(rule), _config(rule))
+        extents = result["resources"]["ogd-local-forecasting-tre200px"]["extents"]
+        assert extents == _TEMPLATE["extents"]
+
+    def test_no_temporal_extent_by_default(self, database: MagicMock) -> None:
+        database.time_ranges[f"{_PREFIX}tre200px"] = (_BEGIN, _END)
+        result = discover(_config(), _config())
+        extents = result["resources"]["ogd-local-forecasting-tre200px"]["extents"]
+        assert extents == _TEMPLATE["extents"]
+
+    def test_temporal_extent_needs_time_field(self, database: MagicMock) -> None:  # noqa: ARG002
+        template = copy.deepcopy(_TEMPLATE)
+        del template["providers"][0]["time_field"]
+        rule = {**_RULE, "temporal_extent": True, "resource": template}
+        with pytest.raises(ValueError, match="time_field"):
+            discover(_config(rule), _config(rule))
 
     def test_collection_id_defaults_to_table(self, database: MagicMock) -> None:  # noqa: ARG002
         rule = {key: value for key, value in _RULE.items() if key != "collection_id"}
@@ -298,6 +341,33 @@ class TestDatabaseHelpers:
         _cursor(conn).fetchone.return_value = ("", None)
         assert discovery._lang_title(conn, "public", "t", "p") is None
 
+    def test_time_range(self) -> None:
+        conn = MagicMock()
+        cursor = _cursor(conn)
+        cet = timezone(timedelta(hours=1))
+        cursor.fetchone.side_effect = [
+            (1,),
+            (datetime(2026, 11, 26, 1, tzinfo=cet), datetime(2026, 12, 5, 23)),  # noqa: DTZ001
+        ]
+
+        time_range = discovery._time_range(conn, "public", "t", "datetime")
+
+        # Normalised to UTC; a naive timestamp is taken as UTC.
+        assert time_range == (_BEGIN, _END)
+        assert time_range[0].tzinfo is UTC
+        assert cursor.execute.call_args_list[0].args[1] == ("public", "t", "datetime")
+
+    def test_time_range_without_column(self) -> None:
+        conn = MagicMock()
+        _cursor(conn).fetchone.return_value = None
+        assert discovery._time_range(conn, "public", "point-meta", "datetime") is None
+        _cursor(conn).execute.assert_called_once()
+
+    def test_time_range_empty_table(self) -> None:
+        conn = MagicMock()
+        _cursor(conn).fetchone.side_effect = [(1,), (None, None)]
+        assert discovery._time_range(conn, "public", "t", "datetime") is None
+
     def test_connect_uses_provider_settings(self, monkeypatch: pytest.MonkeyPatch) -> None:
         connect = MagicMock()
         monkeypatch.setattr(discovery.psycopg2, "connect", connect)
@@ -379,6 +449,53 @@ def test_prepare_config_writes_shared_objects_in_full(
     generated = yaml.safe_load(text)
     assert list(generated["resources"]) == ["sample", "tbl_ogd-local-forecasting-tre200px"]
     assert generated["resources"]["sample"]["extents"]["spatial"]["bbox"][0] == 5.9
+
+
+def test_temporal_extent_survives_the_generated_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, database: MagicMock
+) -> None:
+    """pygeoapi needs datetimes (it calls .tzinfo on them), not strings."""
+    database.time_ranges[f"{_PREFIX}tre200px"] = (_BEGIN, _END)
+    rule = {**_RULE, "temporal_extent": True}
+    source = tmp_path / "config.yml"
+    source.write_text(yaml.safe_dump(_config(rule)))
+    monkeypatch.setattr(discovery, "generate_openapi_document", lambda _path, _fmt: "")
+
+    target = discovery.generate(source, tmp_path / "openapi.yml", _config(rule), _config(rule))
+
+    with target.open() as handle:
+        generated = discovery.yaml_load(handle)
+    temporal = generated["resources"]["ogd-local-forecasting-tre200px"]["extents"]["temporal"]
+    assert (temporal["begin"], temporal["end"]) == (_BEGIN, _END)
+
+
+# ---------------------------------------------------------------------------
+# temporal_extents
+# ---------------------------------------------------------------------------
+
+
+class TestTemporalExtents:
+    def test_keyed_by_collection(self, database: MagicMock) -> None:
+        database.tables.append(f"{_PREFIX}rre150h0")
+        database.time_ranges[f"{_PREFIX}tre200px"] = (_BEGIN, _END)
+        rule = {**_RULE, "temporal_extent": True}
+
+        # rre150h0 has no time range and is left out.
+        assert discovery.temporal_extents(_config(rule), _config(rule)) == {
+            "ogd-local-forecasting-tre200px": (_BEGIN, _END)
+        }
+        database.close.assert_called_once()
+
+    def test_rule_without_temporal_extent(self, database: MagicMock) -> None:
+        database.time_ranges[f"{_PREFIX}tre200px"] = (_BEGIN, _END)
+        assert discovery.temporal_extents(_config(), _config()) == {}
+
+    def test_skips_static_collections(self, database: MagicMock) -> None:
+        database.time_ranges[f"{_PREFIX}tre200px"] = (_BEGIN, _END)
+        rule = {**_RULE, "temporal_extent": True}
+        static = {"ogd-local-forecasting-tre200px": {"title": "Static"}}
+        config = _config(rule, resources=static)
+        assert discovery.temporal_extents(config, config) == {}
 
 
 # ---------------------------------------------------------------------------

@@ -46,6 +46,13 @@ collection's title from, as a pygeoapi language struct, e.g.
 ``parameter_description`` -> ``{"en": "Air temperature …", "de": …}``. It is read
 from the first row of the table, and the template title is kept when the table
 is empty or lacks the columns.
+
+``temporal_extent: true`` (optional) sets the collection's
+``extents.temporal.begin``/``end`` to the earliest and latest value of the feature
+provider's ``time_field`` in the table, keeping the template's other temporal keys
+(``trs``, ...). The template's extent is kept when the table is empty or lacks
+the column. pygeoapi also rejects ``datetime=`` queries outside this extent with a
+400, so it must follow the data: ``swissgeo_oaf.refresh`` re-reads it every tick.
 """
 
 import copy
@@ -54,6 +61,8 @@ import logging
 import os
 import re
 import sys
+from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 
 import psycopg2
@@ -75,6 +84,9 @@ _LANGUAGES = ("en", "de", "fr", "it")
 _FORMATTED_KEYS = ("title", "description")
 
 _CONNECT_TIMEOUT_SECONDS = 10
+
+# (begin, end) of a table's time field, both timezone-aware UTC.
+TimeRange = tuple[datetime, datetime]
 
 
 class _NoAliasDumper(yaml.SafeDumper):
@@ -128,6 +140,18 @@ def _format(value: object, placeholders: dict[str, str]) -> object:
     if isinstance(value, dict):
         return {key: _format(item, placeholders) for key, item in value.items()}
     return value
+
+
+def with_temporal_extent(resource: dict, time_range: TimeRange) -> dict:
+    """Return a copy of *resource* whose temporal extent is *time_range*.
+
+    Only the objects on the path to the extent are copied: the caller may swap the
+    result in for *resource* while requests still read the old one.
+    """
+    begin, end = time_range
+    extents = dict(resource.get("extents") or {})
+    extents["temporal"] = {**(extents.get("temporal") or {}), "begin": begin, "end": end}
+    return {**resource, "extents": extents}
 
 
 def build_resource(
@@ -212,6 +236,49 @@ def _lang_title(conn: connection, schema: str, table: str, prefix: str) -> dict[
     return title or None
 
 
+def _as_utc(value: datetime) -> datetime:
+    """Normalise a timestamp to UTC; a naive one (``timestamp`` column) is taken as UTC."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def _time_range(conn: connection, schema: str, table: str, column: str) -> TimeRange | None:
+    """Return the earliest and latest value of *column* in *table*.
+
+    ``None`` when the table lacks the column or has no value in it. With a B-tree
+    index on the column, PostgreSQL answers min/max from the index ends.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = %s AND table_name = %s AND column_name = %s",
+            (schema, table, column),
+        )
+        if cur.fetchone() is None:
+            return None
+        cur.execute(
+            sql.SQL("SELECT min({column}), max({column}) FROM {table}").format(
+                column=sql.Identifier(column),
+                table=sql.Identifier(schema, table),
+            )
+        )
+        row = cur.fetchone()
+    if row is None or row[0] is None or row[1] is None:
+        return None
+    return _as_utc(row[0]), _as_utc(row[1])
+
+
+def _time_field(rule: dict, provider: dict) -> str | None:
+    """The column the rule's temporal extent is read from, if it asks for one."""
+    if not rule.get("temporal_extent"):
+        return None
+    time_field = provider.get("time_field")
+    if not time_field:
+        raise ValueError("discovery rule has temporal_extent but its provider no time_field")
+    return time_field
+
+
 def _feature_provider(resource: dict) -> dict:
     for provider in resource.get("providers", []):
         if provider.get("type") == "feature":
@@ -221,6 +288,63 @@ def _feature_provider(resource: dict) -> dict:
 
 def _rule_tables(conn: connection, schema: str, rule: dict) -> list[tuple[str, str]]:
     return match_tables(_geometry_tables(conn, schema), rule["tables"], rule.get("exclude", []))
+
+
+def _discovered(
+    raw_config: dict, config: dict
+) -> Iterator[tuple[dict, connection, str, list[tuple[str, str, str]]]]:
+    """Yield ``(rule, conn, schema, [(table, match, collection_id), ...])`` per rule.
+
+    Tables whose collection is configured statically, or already discovered by an
+    earlier rule, are left out with a warning. *conn* is closed when the iteration
+    moves on to the next rule.
+    """
+    rules = raw_config.get("swissgeo", {}).get("discovery", [])
+    interpolated_rules = config.get("swissgeo", {}).get("discovery", [])
+    taken = set(raw_config.get("resources") or {})
+    for rule, interpolated in zip(rules, interpolated_rules, strict=True):
+        provider = _feature_provider(interpolated["resource"])
+        schema = _schema_of(provider)
+        conn = _connect(provider)
+        try:
+            tables = _rule_tables(conn, schema, rule)
+            if not tables:
+                LOGGER.warning("discovery: no table in %s matches %s", schema, rule["tables"])
+            collections = []
+            for table, match in tables:
+                collection_id = rule.get("collection_id", "{table}").format(
+                    table=table, match=match
+                )
+                if collection_id in taken:
+                    LOGGER.warning(
+                        "discovery: collection %s (table %s) is already configured, skipping",
+                        collection_id,
+                        table,
+                    )
+                    continue
+                taken.add(collection_id)
+                collections.append((table, match, collection_id))
+            yield rule, conn, schema, collections
+        finally:
+            conn.close()
+
+
+def temporal_extents(raw_config: dict, config: dict) -> dict[str, TimeRange]:
+    """Return the time range of each discovered collection with ``temporal_extent``.
+
+    Keyed by collection id; a collection whose table has no time range is absent.
+    These are the ranges :func:`discover` would write into the resources.
+    """
+    extents = {}
+    for rule, conn, schema, collections in _discovered(raw_config, config):
+        time_field = _time_field(rule, _feature_provider(rule["resource"]))
+        if time_field is None:
+            continue
+        for table, _, collection_id in collections:
+            time_range = _time_range(conn, schema, table, time_field)
+            if time_range is not None:
+                extents[collection_id] = time_range
+    return extents
 
 
 def matched_tables(raw_config: dict, config: dict) -> tuple[tuple[str, ...], ...]:
@@ -250,39 +374,21 @@ def discover(raw_config: dict, config: dict) -> dict:
     supplies the database connection. *raw_config* is what the resources are built
     from, so that the references survive into the generated file.
     """
-    rules = raw_config.get("swissgeo", {}).get("discovery", [])
-    interpolated_rules = config.get("swissgeo", {}).get("discovery", [])
     result = copy.deepcopy(raw_config)
     resources = result.setdefault("resources", {}) or {}
     result["resources"] = resources
 
-    for rule, interpolated in zip(rules, interpolated_rules, strict=True):
-        provider = _feature_provider(interpolated["resource"])
-        schema = _schema_of(provider)
-        conn = _connect(provider)
-        try:
-            tables = _rule_tables(conn, schema, rule)
-            if not tables:
-                LOGGER.warning("discovery: no table in %s matches %s", schema, rule["tables"])
-            for table, match in tables:
-                collection_id = rule.get("collection_id", "{table}").format(
-                    table=table, match=match
-                )
-                if collection_id in resources:
-                    LOGGER.warning(
-                        "discovery: collection %s (table %s) is already configured, skipping",
-                        collection_id,
-                        table,
-                    )
-                    continue
-                title_columns = rule.get("title_columns")
-                title = _lang_title(conn, schema, table, title_columns) if title_columns else None
-                resources[collection_id] = build_resource(
-                    rule["resource"], collection_id, table, match, title
-                )
-                LOGGER.info("discovery: serving table %s as collection %s", table, collection_id)
-        finally:
-            conn.close()
+    for rule, conn, schema, collections in _discovered(raw_config, config):
+        title_columns = rule.get("title_columns")
+        time_field = _time_field(rule, _feature_provider(rule["resource"]))
+        for table, match, collection_id in collections:
+            title = _lang_title(conn, schema, table, title_columns) if title_columns else None
+            resource = build_resource(rule["resource"], collection_id, table, match, title)
+            time_range = _time_range(conn, schema, table, time_field) if time_field else None
+            if time_range is not None:
+                resource = with_temporal_extent(resource, time_range)
+            resources[collection_id] = resource
+            LOGGER.info("discovery: serving table %s as collection %s", table, collection_id)
 
     return result
 

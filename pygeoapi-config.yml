@@ -70,7 +70,11 @@ metadata:
 # `collection_id`, `title` and `description`, {match} is what the `*` matched
 # (e.g. tre200px) and {table} the full table name. `title_columns` names a
 # <prefix>_<lang> column family the title is read from (first row), falling back
-# to the template title when the table is empty.
+# to the template title when the table is empty. `temporal_extent: true` replaces
+# extents.temporal begin/end with the min/max of the provider's time_field in the
+# table, re-read on every refresh; the template's extent is the fallback for an
+# empty table or one without the column (point-meta). pygeoapi answers 400 to a
+# datetime= outside that extent.
 #
 # The tables are created and filled by the forecast pipeline. They are only
 # discovered at startup; a new table appears after a restart.
@@ -82,6 +86,7 @@ swissgeo:
     - tables: tbl_ogd-local-forecasting-*
       collection_id: ogd-local-forecasting-{match}
       title_columns: parameter_description
+      temporal_extent: true
       # The tables store geometry in CH1903+ / LV95 (EPSG:2056). storage_crs names
       # 2056 to match the column, so serving LV95 needs no transform; CRS84 is
       # still offered, and pygeoapi reprojects 2056→CRS84 for those requests via

@@ -109,6 +109,10 @@ see the comments in the file. The static `sample-mch-param` reuses that template
 anchors (`&forecast-resource`, `&forecast-provider`). The collection title is read from the table's
 `parameter_description_<lang>` columns, so it is localised. Each provider gets the table and
 the collection id as its `resource_id`, which the items' `rel=self` links are built from.
+The temporal extent (`temporal_extent: true` on the rule) is the earliest and latest `datetime`
+in the table, so it follows the forecast runs the pipeline loads. The template's extent is used
+for an empty table and for `ogd-local-forecasting-point-meta`, which has no `datetime` column.
+The static `sample-mch-param` keeps the template's extent.
 
 Discovery writes `pygeoapi-config.generated.yml` next to `PYGEOAPI_OPENAPI`, then generates
 the OpenAPI document from it and points `PYGEOAPI_CONFIG` at it. That directory therefore has to
@@ -122,7 +126,13 @@ Worth knowing:
   tables; when that list changed, it regenerates the config and OpenAPI document and swaps the
   new collections into the running pygeoapi, without a restart. A dropped table's collection
   disappears the same way. A failed refresh is logged and keeps the current collections.
-- **Only the table list is watched.** A changed `parameter_description_<lang>` title is picked
+- **The temporal extents are re-read on every tick** (min/max of the indexed `datetime`
+  column, per table). When only they changed, just the extents are swapped in; the config file
+  and OpenAPI document are left as they are. pygeoapi rejects a `datetime=` outside a
+  collection's extent with a 400, so for up to one interval after a forecast run is loaded its
+  newest hours can be refused although the rows are there. A shorter
+  `DISCOVERY_REFRESH_SECONDS` narrows that window.
+- **Only the table list and the time ranges are watched.** A changed `parameter_description_<lang>` title is picked
   up with the next table change or restart, as are changes to the rest of `pygeoapi-config.yml`.
 - **Replicas refresh independently**, so for up to one interval a new collection can be served
   by some pods and not yet by others.

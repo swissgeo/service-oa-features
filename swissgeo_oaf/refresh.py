@@ -6,10 +6,14 @@ pygeoapi reads ``api.config["resources"]`` on every request and serves
 replacing those on its ``API`` object (``pygeoapi.starlette_app.api_``).
 
 Every interval, the refresher lists the tables the discovery rules match -- one
-cheap query per rule. Only when that set differs from the last one does it run
-the full discovery, regenerate the config and OpenAPI document, and swap them in.
-A failed refresh is logged and leaves the served collections unchanged; the next
-tick tries again.
+cheap query per rule -- and, for rules with ``temporal_extent``, reads each
+table's time range (min/max of an indexed column). Only when the set of tables
+differs from the last one does it run the full discovery, regenerate the config
+and OpenAPI document, and swap them in. When only time ranges moved (the
+pipeline loaded a new forecast run), it swaps in the new temporal extents of the
+affected collections alone: the OpenAPI document does not contain them. A failed
+refresh is logged and leaves the served collections unchanged; the next tick
+tries again.
 
 Limitations:
 
@@ -20,6 +24,9 @@ Limitations:
   after a restart.
 - Each process refreshes on its own timer, so replicas can disagree on the
   collections for up to one interval.
+- The temporal extent lags the data by up to one interval. pygeoapi rejects a
+  ``datetime=`` outside the extent with a 400, so in that window the newest
+  forecast hours can be refused although the rows exist.
 """
 
 import asyncio
@@ -32,7 +39,14 @@ from pygeoapi import l10n
 from pygeoapi.api import API
 from pygeoapi.util import yaml_load
 
-from swissgeo_oaf.discovery import generate, load_source, matched_tables
+from swissgeo_oaf.discovery import (
+    TimeRange,
+    generate,
+    load_source,
+    matched_tables,
+    temporal_extents,
+    with_temporal_extent,
+)
 
 LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +59,7 @@ class CollectionRefresher:
         self.openapi_path = openapi_path
         self.interval_seconds = interval_seconds
         self._tables: tuple[tuple[str, ...], ...] | None = None
+        self._extents: dict[str, TimeRange] | None = None
         self._api: API | None = None
 
     @classmethod
@@ -65,32 +80,56 @@ class CollectionRefresher:
         return self.interval_seconds > 0
 
     def snapshot(self) -> None:
-        """Record the currently matched tables as the baseline.
+        """Record the currently matched tables and time ranges as the baseline.
 
-        Call it *before* the startup discovery: a table created in between then
-        differs from the baseline and is picked up on the first tick, rather than
-        being missed.
+        Call it *before* the startup discovery: a table created (or a forecast run
+        loaded) in between then differs from the baseline and is picked up on the
+        first tick, rather than being missed.
         """
-        self._tables = matched_tables(*load_source(self.source))
+        raw_config, config = load_source(self.source)
+        self._tables = matched_tables(raw_config, config)
+        self._extents = temporal_extents(raw_config, config)
 
     def attach(self, api: API) -> None:
         """Set the pygeoapi ``API`` whose collections are replaced."""
         self._api = api
 
     def refresh(self) -> bool:
-        """Rediscover the tables; swap in the new collections if they changed.
+        """Rediscover the tables and time ranges; swap in what changed.
 
         Blocking (database and file I/O); run it off the event loop. Returns whether
-        the collections were replaced.
+        the served collections were changed.
         """
         if self._api is None:
             raise RuntimeError("CollectionRefresher.refresh() called before attach()")
         raw_config, config = load_source(self.source)
         tables = matched_tables(raw_config, config)
-        if tables == self._tables:
-            LOGGER.debug("discovery refresh: tables unchanged")
+        # Read before generate(): should the data move in between, the served
+        # extent is newer than this baseline and the next tick updates it again.
+        extents = temporal_extents(raw_config, config)
+        if tables == self._tables and extents == self._extents:
+            LOGGER.debug("discovery refresh: tables and temporal extents unchanged")
             return False
 
+        # Same tables and the same collections with a time range: only the ranges
+        # moved. Any other change (a table gone empty included, which falls back to
+        # the template's extent) takes the full rebuild.
+        if (
+            tables == self._tables
+            and self._extents is not None
+            and extents.keys() == self._extents.keys()
+        ):
+            self._swap_temporal_extents(extents)
+        else:
+            self._swap_collections(raw_config, config)
+        self._tables = tables
+        self._extents = extents
+        return True
+
+    def _swap_collections(self, raw_config: dict, config: dict) -> None:
+        """Run the full discovery and swap in the new resources and OpenAPI document."""
+        api = self._api
+        assert api is not None  # noqa: S101 -- checked by refresh()
         target = generate(self.source, self.openapi_path, raw_config, config)
         with target.open(encoding="utf-8") as handle:
             resources = yaml_load(handle)["resources"]
@@ -98,15 +137,40 @@ class CollectionRefresher:
 
         # Replace (rather than mutate) each object, so requests already running
         # keep a consistent view of the old one.
-        api = self._api
         api.config["resources"] = resources
         api.tpl_config["resources"] = copy.deepcopy(resources)
         # A str for a JSON document, as from pygeoapi's own load_openapi_document().
         api.openapi = openapi  # ty: ignore[invalid-assignment]
         _invalidate_translated_configs()
-        self._tables = tables
         LOGGER.info("discovery refresh: now serving %d collections", len(resources))
-        return True
+
+    def _swap_temporal_extents(self, extents: dict[str, TimeRange]) -> None:
+        """Swap in the temporal extents that differ from the served ones.
+
+        The generated config file keeps the extents of the last full discovery; it
+        is only read at startup, which runs the discovery again anyway.
+        """
+        api = self._api
+        assert api is not None  # noqa: S101 -- checked by refresh()
+        previous = self._extents or {}
+        changed = {
+            collection_id: time_range
+            for collection_id, time_range in extents.items()
+            if previous.get(collection_id) != time_range
+        }
+        # New dicts down to the extent, so requests already running keep the old one.
+        resources = dict(api.config["resources"])
+        for collection_id, time_range in changed.items():
+            if collection_id in resources:
+                resources[collection_id] = with_temporal_extent(
+                    resources[collection_id], time_range
+                )
+        api.config["resources"] = resources
+        api.tpl_config["resources"] = copy.deepcopy(resources)
+        _invalidate_translated_configs()
+        LOGGER.info(
+            "discovery refresh: updated the temporal extent of %d collections", len(changed)
+        )
 
     def _load_openapi(self) -> dict | str:
         """Read the OpenAPI document like pygeoapi's ``load_openapi_document()``."""
